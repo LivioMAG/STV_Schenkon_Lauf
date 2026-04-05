@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sprinttag Verwaltung</title>
+    <link rel="stylesheet" href="assets/css/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  </head>
+  <body>
+    <main class="container">
+      <section id="public-section" class="card">
+        <h1>Sprinttag Anmeldung</h1>
+        <p class="muted">Bitte für den Amateur-Sprintanlass anmelden.</p>
+
+        <form id="public-registration-form" class="grid-form">
+          <label>
+            Name
+            <input id="reg-name" name="name" type="text" required maxlength="120" />
+          </label>
+          <label>
+            Geschlecht
+            <select id="reg-gender" name="gender" required>
+              <option value="">Bitte wählen</option>
+              <option value="male">Männlich</option>
+              <option value="female">Weiblich</option>
+            </select>
+          </label>
+          <label>
+            Geburtsjahr (optional)
+            <input id="reg-birth-year" name="birth_year" type="number" min="1900" max="2100" />
+          </label>
+          <button type="submit">Anmelden</button>
+        </form>
+
+        <p id="public-message" class="message" aria-live="polite"></p>
+
+        <hr />
+        <button id="show-admin-login" class="link-button" type="button">Admin-Login</button>
+      </section>
+
+      <section id="admin-login-section" class="card hidden">
+        <h2>Admin-Login</h2>
+        <form id="admin-login-form" class="grid-form">
+          <label>
+            E-Mail
+            <input id="admin-email" type="email" required />
+          </label>
+          <label>
+            Passwort
+            <input id="admin-password" type="password" required />
+          </label>
+          <div class="inline-actions">
+            <button type="submit">Einloggen</button>
+            <button id="back-to-public" type="button" class="secondary">Zurück</button>
+          </div>
+        </form>
+        <p id="admin-login-message" class="message" aria-live="polite"></p>
+      </section>
+
+      <section id="admin-section" class="card hidden">
+        <div class="admin-header">
+          <h2>Admin-Oberfläche</h2>
+          <div>
+            <span id="admin-email-display" class="muted"></span>
+            <button id="admin-logout" type="button" class="secondary">Logout</button>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="Admin Tabs">
+          <button class="tab-btn active" data-tab="participants">Anmeldungen</button>
+          <button class="tab-btn" data-tab="categories">Kategorien</button>
+          <button class="tab-btn" data-tab="numbers">Startnummern</button>
+          <button class="tab-btn" data-tab="heats">Startaufstellungen</button>
+          <button class="tab-btn" data-tab="pdf">PDF-Export</button>
+          <button class="tab-btn" data-tab="results">Zeiten / Resultate</button>
+        </nav>
+
+        <section id="tab-participants" class="tab-panel active">
+          <div class="toolbar">
+            <input id="participant-search" type="search" placeholder="Name suchen ..." />
+            <select id="participant-gender-filter">
+              <option value="">Alle Geschlechter</option>
+              <option value="male">Männlich</option>
+              <option value="female">Weiblich</option>
+            </select>
+            <button id="reload-participants" type="button" class="secondary">Neu laden</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Geschlecht</th>
+                  <th>Startnr.</th>
+                  <th>Kategorie</th>
+                  <th>Erstellt</th>
+                  <th>Aktionen</th>
+                </tr>
+              </thead>
+              <tbody id="participants-table-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="tab-categories" class="tab-panel">
+          <form id="category-form" class="grid-form compact">
+            <input type="hidden" id="category-id" />
+            <label>Name<input id="category-name" type="text" required maxlength="120" /></label>
+            <label>Geschlecht
+              <select id="category-gender" required>
+                <option value="male">Männlich</option>
+                <option value="female">Weiblich</option>
+              </select>
+            </label>
+            <label>Distanz
+              <select id="category-distance" required>
+                <option value="60">60m</option>
+                <option value="80">80m</option>
+                <option value="100">100m</option>
+              </select>
+            </label>
+            <label>Min. Geburtsjahr<input id="category-min-birth-year" type="number" min="1900" max="2100" /></label>
+            <label>Max. Geburtsjahr<input id="category-max-birth-year" type="number" min="1900" max="2100" /></label>
+            <div class="inline-actions">
+              <button type="submit">Speichern</button>
+              <button id="category-reset" type="button" class="secondary">Zurücksetzen</button>
+            </div>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Name</th><th>Geschlecht</th><th>Distanz</th><th>Jahrgang</th><th>Aktionen</th></tr>
+              </thead>
+              <tbody id="categories-table-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="tab-numbers" class="tab-panel">
+          <form id="blocked-number-form" class="grid-form compact">
+            <label>Gesperrte Startnummer
+              <input id="blocked-number" type="number" min="1" required />
+            </label>
+            <label>Grund (optional)
+              <input id="blocked-reason" type="text" maxlength="160" />
+            </label>
+            <button type="submit">Nummer sperren</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Nummer</th><th>Grund</th><th>Erstellt</th><th>Aktionen</th></tr>
+              </thead>
+              <tbody id="blocked-numbers-table-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="tab-heats" class="tab-panel">
+          <div class="toolbar">
+            <select id="heats-category-select"></select>
+            <select id="heats-round-select">
+              <option value="1">1. Lauf</option>
+              <option value="2">2. Lauf</option>
+              <option value="99">Königslauf (Vorbereitung)</option>
+            </select>
+            <button id="generate-heats" type="button">Startaufstellungen generieren</button>
+            <button id="load-heats" type="button" class="secondary">Anzeigen</button>
+          </div>
+          <div id="heats-output"></div>
+        </section>
+
+        <section id="tab-pdf" class="tab-panel">
+          <p class="muted">Exportiert alle aktuell vorhandenen Startaufstellungen als PDF.</p>
+          <button id="export-pdf" type="button">PDF exportieren</button>
+          <p id="pdf-message" class="message" aria-live="polite"></p>
+        </section>
+
+        <section id="tab-results" class="tab-panel">
+          <div class="toolbar">
+            <select id="results-heat-select"></select>
+            <button id="load-results" type="button" class="secondary">Lauf laden</button>
+            <button id="save-results" type="button">Zeiten speichern</button>
+          </div>
+          <div id="results-editor"></div>
+        </section>
+
+        <p id="admin-message" class="message" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>
