@@ -965,9 +965,6 @@ async function getParticipantsForCategory(categoryId) {
   const { data, error } = await supabase
     .from('participants')
     .select('id,last_name,first_name,start_number,gender,category_id,age,birth_year')
-    .eq('gender', category.gender)
-    .gte('age', category.min_age)
-    .lte('age', category.max_age)
     .order('start_number', { ascending: true });
 
   if (error) {
@@ -975,7 +972,20 @@ async function getParticipantsForCategory(categoryId) {
     return [];
   }
 
-  return data || [];
+  const filtered = (data || []).filter((participant) => {
+    if (participant.category_id === categoryId) return true;
+    if (participant.gender !== category.gender) return false;
+
+    const participantAge = resolveAge(participant);
+    return participantAge >= category.min_age && participantAge <= category.max_age;
+  });
+
+  const uniqueById = new Map();
+  for (const participant of filtered) {
+    uniqueById.set(participant.id, participant);
+  }
+
+  return [...uniqueById.values()];
 }
 
 function findCategoryForParticipant(gender, age) {
