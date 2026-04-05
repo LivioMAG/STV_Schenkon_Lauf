@@ -304,8 +304,7 @@ grant execute on function public.is_admin() to anon, authenticated;
 grant usage on schema public to anon, authenticated;
 grant usage, select on all sequences in schema public to anon, authenticated;
 
-grant select, insert, update, delete on public.participants to authenticated;
-grant insert (last_name, first_name, gender, age, birth_year) on public.participants to anon;
+grant select, insert, update, delete on public.participants to anon, authenticated;
 
 grant select, insert, update, delete on public.categories to authenticated;
 grant select, insert, update, delete on public.blocked_start_numbers to authenticated;
@@ -335,6 +334,27 @@ with check (
   and age between 1 and 120
   and birth_year between 1900 and extract(year from now())::int
   and category_id is null
+);
+
+drop policy if exists participants_public_select on public.participants;
+create policy participants_public_select
+on public.participants
+for select
+to anon, authenticated
+using (true);
+
+drop policy if exists participants_public_update on public.participants;
+create policy participants_public_update
+on public.participants
+for update
+to anon, authenticated
+using (true)
+with check (
+  last_name is not null
+  and first_name is not null
+  and gender in ('male', 'female')
+  and age between 1 and 120
+  and birth_year between 1900 and extract(year from now())::int
 );
 
 -- Admin can perform all participant operations.
