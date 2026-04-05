@@ -47,6 +47,7 @@ function wireCommonEvents() {
   $('participant-search').addEventListener('input', renderParticipantsTable);
   $('participant-gender-filter').addEventListener('change', renderParticipantsTable);
   $('reload-participants').addEventListener('click', loadParticipants);
+  $('assign-categories').addEventListener('click', assignParticipantsToExistingCategories);
 
   $('category-form').addEventListener('submit', saveCategory);
   $('category-reset').addEventListener('click', resetCategoryForm);
@@ -81,20 +82,20 @@ async function onPublicRegistration(event) {
   const lastName = $('reg-last-name').value.trim();
   const firstName = $('reg-first-name').value.trim();
   const gender = document.querySelector('input[name="gender"]:checked')?.value;
-  const age = Number($('reg-age').value);
-
-  if (!lastName || !firstName || !gender || !Number.isInteger(age)) {
-    $('public-message').textContent = 'Bitte Nachname, Vorname, Geschlecht und Alter ausfüllen.';
-    return;
-  }
-
-  if (age < 1 || age > 120) {
-    $('public-message').textContent = 'Alter muss zwischen 1 und 120 liegen.';
-    return;
-  }
-
+  const birthYear = Number($('reg-birth-year').value);
   const currentYear = new Date().getFullYear();
-  const birthYear = currentYear - age;
+
+  if (!lastName || !firstName || !gender || !Number.isInteger(birthYear)) {
+    $('public-message').textContent = 'Bitte Nachname, Vorname, Geschlecht und Geburtsjahr ausfüllen.';
+    return;
+  }
+
+  if (birthYear < currentYear - 120 || birthYear > currentYear - 1) {
+    $('public-message').textContent = `Geburtsjahr muss zwischen ${currentYear - 120} und ${currentYear - 1} liegen.`;
+    return;
+  }
+
+  const age = currentYear - birthYear;
   const autoCategoryId = await findCategoryIdByProfile(gender, age);
 
   const { error } = await supabase.from('participants').insert({
@@ -113,6 +114,47 @@ async function onPublicRegistration(event) {
 
   $('public-registration-form').reset();
   $('public-message').textContent = 'Erfolgreich angemeldet. Die Anmeldung wurde gespeichert.';
+}
+
+async function assignParticipantsToExistingCategories() {
+  if (!participants.length) {
+    await loadParticipants();
+  }
+
+  if (!participants.length) {
+    return setAdminMessage('Keine Anmeldungen vorhanden.', true);
+  }
+
+  await withLoadingScreen('Kategorien werden automatisch zugewiesen ...', async () => {
+    const updates = [];
+
+    for (const participant of participants) {
+      const age = resolveAge(participant);
+      const suggestedCategory = findCategoryForParticipant(participant.gender, age);
+      if (!suggestedCategory || participant.category_id === suggestedCategory.id) continue;
+
+      updates.push(
+        supabase
+          .from('participants')
+          .update({ category_id: suggestedCategory.id })
+          .eq('id', participant.id)
+      );
+    }
+
+    if (!updates.length) {
+      setAdminMessage('Alle vorhandenen Anmeldungen sind bereits korrekt zugewiesen.');
+      return;
+    }
+
+    const results = await Promise.all(updates);
+    const failed = results.filter((result) => result.error);
+    if (failed.length) {
+      throw new Error(failed[0].error.message);
+    }
+
+    setAdminMessage(`${updates.length} Anmeldung(en) wurden automatisch Kategorien zugewiesen.`);
+    await loadParticipants();
+  });
 }
 
 async function onAdminLogin(event) {
@@ -1021,4 +1063,25 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+
+async function withLoadingScreen(message, task) {
+  const overlay = $('loading-overlay');
+  const textElement = $('loading-text');
+  if (!overlay || !textElement) {
+    return task();
+  }
+
+  textElement.textContent = message || 'Lade ...';
+  overlay.classList.remove('hidden');
+
+  try {
+    return await task();
+  } catch (error) {
+    setAdminMessage(error.message || 'Vorgang fehlgeschlagen.', true);
+    return null;
+  } finally {
+    overlay.classList.add('hidden');
+  }
 }

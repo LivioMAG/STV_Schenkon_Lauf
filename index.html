@@ -37,8 +37,8 @@
           </fieldset>
 
           <label>
-            Alter
-            <input id="reg-age" name="age" type="number" min="1" max="120" required />
+            Geburtsjahr
+            <input id="reg-birth-year" name="birth_year" type="number" min="1900" max="2100" required />
           </label>
 
           <button type="submit">Anmelden</button>
@@ -95,6 +95,7 @@
               <option value="female">Weiblich</option>
             </select>
             <button id="reload-participants" type="button" class="secondary">Neu laden</button>
+            <button id="assign-categories" type="button">Kategorien automatisch zuweisen</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -196,6 +197,14 @@
         <p id="admin-message" class="message" aria-live="polite"></p>
       </section>
     </main>
+
+
+    <div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-busy="true">
+      <div class="loading-card">
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="loading-text">Lade ...</p>
+      </div>
+    </div>
 
     <script type="module" src="js/app.js"></script>
   </body>
