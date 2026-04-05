@@ -4,6 +4,7 @@ const ROUND_TYPES = {
   second_run: '2. Lauf',
   kings_run: 'Königslauf'
 };
+const ROUND_ORDER = ['first_run', 'second_run', 'kings_run'];
 
 let supabase;
 let categories = [];
@@ -51,15 +52,25 @@ function wireCommonEvents() {
 
   $('category-form').addEventListener('submit', saveCategory);
   $('category-reset').addEventListener('click', resetCategoryForm);
+  $('category-has-run-2').addEventListener('change', syncCategoryRunToggles);
 
   $('blocked-number-form').addEventListener('submit', saveBlockedNumber);
 
   $('heats-round-select').addEventListener('change', handleRoundFilterChange);
+  $('heats-category-select').addEventListener('change', handleRoundFilterChange);
   $('show-lineup').addEventListener('click', showStartLineup);
   $('save-lineup-times').addEventListener('click', saveLineupTimes);
   $('calculate-rankings').addEventListener('click', loadCategoryRanking);
 
   $('export-pdf').addEventListener('click', exportRankingsPdf);
+}
+
+function syncCategoryRunToggles() {
+  const hasRun2 = $('category-has-run-2').checked;
+  if (!hasRun2) {
+    $('category-has-kings-run').checked = false;
+  }
+  $('category-has-kings-run').disabled = !hasRun2;
 }
 
 async function restoreSession() {
@@ -196,7 +207,8 @@ function activateTab(name) {
 
 function setAdminMessage(message, isError = false) {
   const el = $('admin-message');
-  el.style.color = isError ? '#c62828' : '#19593b';
+  el.classList.toggle('is-error', isError);
+  el.classList.toggle('is-success', !isError);
   el.textContent = message;
 }
 
@@ -208,7 +220,7 @@ async function loadAllAdminData() {
 async function loadParticipants() {
   const { data, error } = await supabase
     .from('participants')
-    .select('id,last_name,first_name,gender,age,birth_year,start_number,category_id,created_at,categories(name,distance,min_age,max_age)')
+    .select('id,last_name,first_name,gender,age,birth_year,start_number,category_id,created_at,categories(name,distance,min_age,max_age,gender_mode)')
     .order('created_at', { ascending: false });
 
   if (error) return setAdminMessage(error.message, true);
@@ -234,7 +246,7 @@ function renderParticipantsTable() {
     const created = new Date(p.created_at).toLocaleString('de-CH');
     const age = resolveAge(p);
     const categoryLabel = p.categories
-      ? `${p.categories.name} (${DISTANCE_LABEL[p.categories.distance]}, ${p.categories.min_age}-${p.categories.max_age}J)`
+      ? `${p.categories.name} (${DISTANCE_LABEL[p.categories.distance]}, ${p.categories.min_age}-${p.categories.max_age}J, ${genderModeLabel(p.categories.gender_mode)})`
       : '-';
 
     tr.innerHTML = `
@@ -273,8 +285,7 @@ async function openParticipantEdit(participant) {
   const suggested = findCategoryForParticipant(gender, age)?.id ?? participant.category_id;
   const categoryInput = window.prompt(
     `Kategorie-ID setzen (aktuell: ${participant.category_id ?? 'keine'})\nVorschlag anhand Alter/Geschlecht: ${suggested ?? '-'}\nVerfügbare Kategorien:\n${categories
-      .map((c) => `${c.id}: ${c.name} (${genderLabel(c.gender)}, ${DISTANCE_LABEL[c.distance]}, ${c.min_age}-${c.max_age}J)`)
-      .join('\n')}`,
+      .map((c) => `${c.id}: ${c.name} (${genderModeLabel(c.gender_mode)}, ${DISTANCE_LABEL[c.distance]}, ${c.min_age}-${c.max_age}J)`).join('\n')}`,
     suggested ?? ''
   );
 
@@ -319,9 +330,10 @@ async function loadCategories() {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${escapeHtml(cat.name)}</td>
-      <td>${genderLabel(cat.gender)}</td>
+      <td>${genderModeLabel(cat.gender_mode)}</td>
       <td>${DISTANCE_LABEL[cat.distance]}</td>
       <td>${range}</td>
+      <td>${roundSummary(cat)}</td>
       <td>
         <button class="secondary" data-action="edit">Bearbeiten</button>
         <button class="danger" data-action="delete">Löschen</button>
@@ -339,15 +351,22 @@ async function loadCategories() {
 function fillCategoryForm(cat) {
   $('category-id').value = cat.id;
   $('category-name').value = cat.name;
-  $('category-gender').value = cat.gender;
+  $('category-gender-mode').value = cat.gender_mode;
   $('category-distance').value = String(cat.distance);
   $('category-min-age').value = cat.min_age;
   $('category-max-age').value = cat.max_age;
+  $('category-has-run-2').checked = Boolean(cat.has_run_2);
+  $('category-has-kings-run').checked = Boolean(cat.has_kings_run);
+  syncCategoryRunToggles();
 }
 
 function resetCategoryForm() {
   $('category-form').reset();
   $('category-id').value = '';
+  $('category-has-run-1').checked = true;
+  $('category-has-run-2').checked = true;
+  $('category-has-kings-run').checked = true;
+  syncCategoryRunToggles();
 }
 
 async function saveCategory(event) {
@@ -355,6 +374,8 @@ async function saveCategory(event) {
   const id = $('category-id').value;
   const minAge = Number($('category-min-age').value);
   const maxAge = Number($('category-max-age').value);
+  const hasRun2 = $('category-has-run-2').checked;
+  const hasKingsRun = hasRun2 && $('category-has-kings-run').checked;
 
   if (minAge > maxAge) {
     return setAdminMessage('Mindestalter darf nicht größer als Höchstalter sein.', true);
@@ -362,10 +383,13 @@ async function saveCategory(event) {
 
   const payload = {
     name: $('category-name').value.trim(),
-    gender: $('category-gender').value,
+    gender_mode: $('category-gender-mode').value,
     distance: Number($('category-distance').value),
     min_age: minAge,
-    max_age: maxAge
+    max_age: maxAge,
+    has_run_1: true,
+    has_run_2: hasRun2,
+    has_kings_run: hasKingsRun
   };
 
   const query = id
@@ -436,54 +460,77 @@ function renderCategorySelectors() {
   const options = ['<option value="">Kategorie wählen</option>']
     .concat(
       categories.map(
-        (c) => `<option value="${c.id}">${escapeHtml(c.name)} (${DISTANCE_LABEL[c.distance]}, ${c.min_age}-${c.max_age}J)</option>`
+        (c) => `<option value="${c.id}">${escapeHtml(c.name)} (${DISTANCE_LABEL[c.distance]}, ${c.min_age}-${c.max_age}J, ${roundSummary(c)})</option>`
       )
     )
     .join('');
   $('heats-category-select').innerHTML = options;
+  renderRoundSelectOptions();
+}
+
+function renderRoundSelectOptions() {
+  const category = selectedCategory();
+  const roundSelect = $('heats-round-select');
+  const current = roundSelect.value;
+
+  roundSelect.innerHTML = ROUND_ORDER
+    .map((roundType) => {
+      const allowed = category ? isRoundAllowedForCategory(category, roundType) : true;
+      const stateText = allowed ? '' : ' (deaktiviert)';
+      return `<option value="${roundType}" ${allowed ? '' : 'disabled'}>${roundLabel(roundType)}${stateText}</option>`;
+    })
+    .join('');
+
+  const currentOption = [...roundSelect.options].find((option) => option.value === current && !option.disabled);
+  if (currentOption) {
+    roundSelect.value = current;
+    return;
+  }
+
+  const firstEnabled = [...roundSelect.options].find((option) => !option.disabled);
+  if (firstEnabled) {
+    roundSelect.value = firstEnabled.value;
+  }
 }
 
 function handleRoundFilterChange() {
-  const isKings = $('heats-round-select').value === 'kings_run';
-  $('heats-category-select').disabled = isKings;
+  renderRoundSelectOptions();
   $('category-ranking-output').innerHTML = '';
 }
 
 async function showStartLineup() {
+  const category = selectedCategory();
   const roundType = $('heats-round-select').value;
-  const categoryId = Number($('heats-category-select').value);
 
-  if (roundType !== 'kings_run' && !categoryId) {
+  if (!category) {
     return setAdminMessage('Bitte zuerst eine Kategorie auswählen.', true);
   }
 
-  const lineup = await getLineupParticipants(roundType, Number.isNaN(categoryId) ? null : categoryId);
+  if (!isRoundAllowedForCategory(category, roundType)) {
+    return setAdminMessage('Dieser Lauf ist für die ausgewählte Kategorie nicht aktiv.', true);
+  }
+
+  const lineup = await getLineupParticipants(roundType, category.id);
   if (!lineup.length) {
     $('heats-output').innerHTML = '<p class="muted">Keine Teilnehmenden für diese Auswahl vorhanden.</p>';
     return setAdminMessage('Keine Teilnehmenden für diese Auswahl vorhanden.', true);
   }
 
-  await ensureHeatAndEntries(roundType, roundType === 'kings_run' ? null : categoryId, lineup);
-  await renderLineupTable(roundType, lineup);
+  await ensureHeatAndEntries(roundType, category.id, lineup);
+  await renderLineupTable(roundType, category, lineup);
   setAdminMessage('Startaufstellung geladen.');
 }
 
 async function getLineupParticipants(roundType, categoryId) {
   if (roundType === 'first_run') {
-    const data = await getParticipantsForCategory(categoryId);
-    if (!data.length) {
-      setAdminMessage('Keine Teilnehmenden in dieser Kategorie gefunden. Prüfe Alter/Geschlecht und Kategorie-Bereich.', true);
-      return [];
-    }
-    return data;
+    return getParticipantsForCategory(categoryId);
   }
 
   if (roundType === 'second_run') {
-    const topFour = await getTopParticipantsFromFirstRun(categoryId, 4);
-    return topFour;
+    return getTopParticipantsFromFirstRun(categoryId, 4);
   }
 
-  return getKingsRunQualifiedParticipants();
+  return getKingsRunQualifiedParticipants(categoryId);
 }
 
 async function getTopParticipantsFromFirstRun(categoryId, limitCount) {
@@ -529,11 +576,12 @@ async function getTopParticipantsFromFirstRun(categoryId, limitCount) {
   return uniqueParticipants.slice(0, limitCount);
 }
 
-async function getKingsRunQualifiedParticipants() {
+async function getKingsRunQualifiedParticipants(categoryId) {
   const { data: secondRunHeats, error: hError } = await supabase
     .from('heats')
     .select('id')
-    .eq('round_type', 'second_run');
+    .eq('round_type', 'second_run')
+    .eq('category_id', categoryId);
 
   if (hError) {
     setAdminMessage(hError.message, true);
@@ -575,10 +623,11 @@ async function getKingsRunQualifiedParticipants() {
 }
 
 async function ensureHeatAndEntries(roundType, categoryId, lineup) {
-  let query = supabase.from('heats').select('id').eq('round_type', roundType);
-  query = categoryId === null ? query.is('category_id', null) : query.eq('category_id', categoryId);
-
-  const { data: existingHeats, error: heatErr } = await query;
+  const { data: existingHeats, error: heatErr } = await supabase
+    .from('heats')
+    .select('id')
+    .eq('round_type', roundType)
+    .eq('category_id', categoryId);
 
   if (heatErr) {
     setAdminMessage(heatErr.message, true);
@@ -647,18 +696,15 @@ async function replaceWithSingleHeat(existingHeats, roundType, categoryId, lineu
   return insertedHeat.id;
 }
 
-async function renderLineupTable(roundType, lineup) {
-  const resultMaps = await loadResultMapsForLineup(lineup.map((p) => p.id));
-
-  const categoryTitle = roundType === 'kings_run'
-    ? 'Königslauf - 4 Qualifizierte (verschiedene Personen)'
-    : `${escapeHtml(selectedCategory()?.name || '')} - ${roundLabel(roundType)}`;
+async function renderLineupTable(roundType, category, lineup) {
+  const resultMaps = await loadResultMapsForLineup(lineup.map((p) => p.id), category.id);
 
   const rows = lineup
     .map((p, idx) => {
       const firstValue = resultMaps.first.get(p.id) ?? '';
       const secondValue = resultMaps.second.get(p.id) ?? '';
       const kingsValue = resultMaps.kings.get(p.id) ?? '';
+
       return `
       <tr>
         <td>${idx + 1}</td>
@@ -666,16 +712,17 @@ async function renderLineupTable(roundType, lineup) {
         <td>${escapeHtml(p.last_name)}</td>
         <td>${escapeHtml(p.first_name)}</td>
         <td>${genderLabel(p.gender)}</td>
-        <td><input class="small-input" type="number" min="0" step="0.01" data-time-round="first_run" data-participant-id="${p.id}" value="${firstValue}" /></td>
-        <td><input class="small-input" type="number" min="0" step="0.01" data-time-round="second_run" data-participant-id="${p.id}" value="${secondValue}" /></td>
-        <td><input class="small-input" type="number" min="0" step="0.01" data-time-round="kings_run" data-participant-id="${p.id}" value="${kingsValue}" /></td>
+        ${renderTimeInputCell(category, roundType, 'first_run', p.id, firstValue)}
+        ${renderTimeInputCell(category, roundType, 'second_run', p.id, secondValue)}
+        ${renderTimeInputCell(category, roundType, 'kings_run', p.id, kingsValue)}
       </tr>`;
     })
     .join('');
 
   $('heats-output').innerHTML = `
     <article class="heat-card">
-      <h4>${categoryTitle}</h4>
+      <h4>${escapeHtml(category.name)} · ${roundLabel(roundType)}</h4>
+      <p class="muted">Aktive Läufe: ${roundSummary(category)}</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -697,15 +744,38 @@ async function renderLineupTable(roundType, lineup) {
   `;
 }
 
-async function loadResultMapsForLineup(participantIds) {
+function renderTimeInputCell(category, selectedRound, cellRound, participantId, value) {
+  const roundEnabled = isRoundAllowedForCategory(category, cellRound);
+  const editable = roundEnabled && selectedRound === cellRound;
+  const disabled = !editable;
+  const cssClass = disabled ? 'small-input disabled-input' : 'small-input active-input';
+  const placeholder = !roundEnabled ? 'Nicht aktiv' : '';
+
+  return `<td>
+    <input
+      class="${cssClass}"
+      type="number"
+      min="0"
+      step="0.01"
+      data-time-round="${cellRound}"
+      data-participant-id="${participantId}"
+      value="${value}"
+      ${disabled ? 'disabled aria-disabled="true"' : ''}
+      placeholder="${placeholder}"
+    />
+  </td>`;
+}
+
+async function loadResultMapsForLineup(participantIds, categoryId) {
   if (!participantIds.length) {
     return { first: new Map(), second: new Map(), kings: new Map() };
   }
 
   const { data, error } = await supabase
     .from('results')
-    .select('participant_id,time_value,heats!inner(round_type)')
+    .select('participant_id,time_value,heats!inner(round_type,category_id)')
     .in('participant_id', participantIds)
+    .eq('heats.category_id', categoryId)
     .in('heats.round_type', ['first_run', 'second_run', 'kings_run']);
 
   if (error) {
@@ -724,29 +794,34 @@ async function loadResultMapsForLineup(participantIds) {
 }
 
 async function saveLineupTimes() {
+  const category = selectedCategory();
   const roundType = $('heats-round-select').value;
-  const categoryId = roundType === 'kings_run' ? null : Number($('heats-category-select').value);
-  if (roundType !== 'kings_run' && !categoryId) {
+
+  if (!category) {
     return setAdminMessage('Bitte zuerst Kategorie und Startaufstellung wählen.', true);
   }
 
-  const participantIds = [...new Set([...$('heats-output').querySelectorAll('input[data-participant-id]')].map((i) => Number(i.dataset.participantId)))];
+  if (!isRoundAllowedForCategory(category, roundType)) {
+    return setAdminMessage('Dieser Lauf ist für die Kategorie nicht erlaubt.', true);
+  }
+
+  const inputs = [...$('heats-output').querySelectorAll(`input[data-time-round="${roundType}"]`)];
+  const participantIds = [...new Set(inputs.map((input) => Number(input.dataset.participantId)))];
   if (!participantIds.length) return setAdminMessage('Bitte zuerst Startaufstellung anzeigen.', true);
 
-  const heatIds = await getHeatIdsForRound(roundType, categoryId);
+  const heatIds = await getHeatIdsForRound(roundType, category.id);
   for (const heatId of heatIds) {
     const { error: delErr } = await supabase.from('results').delete().eq('heat_id', heatId);
     if (delErr) return setAdminMessage(delErr.message, true);
   }
 
   const payload = [];
-  for (const participantId of participantIds) {
-    const input = $('heats-output').querySelector(`input[data-time-round="${roundType}"][data-participant-id="${participantId}"]`);
+  for (const input of inputs) {
     if (!input?.value) continue;
-    payload.push({ participant_id: participantId, time_value: Number(input.value) });
+    payload.push({ participant_id: Number(input.dataset.participantId), time_value: Number(input.value) });
   }
 
-  const currentHeatId = await ensureCurrentHeat(roundType, categoryId, participantIds);
+  const currentHeatId = await ensureCurrentHeat(roundType, category.id, participantIds);
   if (!currentHeatId) return;
 
   if (payload.length) {
@@ -764,7 +839,7 @@ async function ensureCurrentHeat(roundType, categoryId, participantIds) {
     .select('id')
     .eq('round_type', roundType)
     .eq('heat_number', 1)
-    .match(categoryId === null ? { category_id: null } : { category_id: categoryId })
+    .eq('category_id', categoryId)
     .limit(1);
 
   if (error) {
@@ -779,8 +854,7 @@ async function ensureCurrentHeat(roundType, categoryId, participantIds) {
 }
 
 async function getHeatIdsForRound(roundType, categoryId) {
-  const query = supabase.from('heats').select('id').eq('round_type', roundType);
-  const { data, error } = await (categoryId === null ? query.is('category_id', null) : query.eq('category_id', categoryId));
+  const { data, error } = await supabase.from('heats').select('id').eq('round_type', roundType).eq('category_id', categoryId);
   if (error) {
     setAdminMessage(error.message, true);
     return [];
@@ -795,12 +869,13 @@ async function loadCategoryRanking() {
     return;
   }
 
-  const ranking = await buildCategoryRanking(category.id);
+  const ranking = await buildCategoryRanking(category);
   if (!ranking.length) {
     $('category-ranking-output').innerHTML = '<p class="muted">Noch keine Zeiten für diese Kategorie vorhanden.</p>';
     return;
   }
 
+  const secondRunActive = isRoundAllowedForCategory(category, 'second_run');
   const rows = ranking
     .map(
       (row) => `
@@ -810,7 +885,7 @@ async function loadCategoryRanking() {
         <td>${escapeHtml(row.last_name)}</td>
         <td>${escapeHtml(row.first_name)}</td>
         <td>${formatTime(row.first_time)}</td>
-        <td>${formatTime(row.second_time)}</td>
+        <td>${secondRunActive ? formatTime(row.second_time) : '-'}</td>
       </tr>`
     )
     .join('');
@@ -825,11 +900,11 @@ async function loadCategoryRanking() {
   `;
 }
 
-async function buildCategoryRanking(categoryId) {
+async function buildCategoryRanking(category) {
   const { data: catParticipants, error: pError } = await supabase
     .from('participants')
     .select('id,last_name,first_name,start_number')
-    .eq('category_id', categoryId);
+    .eq('category_id', category.id);
   if (pError) {
     setAdminMessage(pError.message, true);
     return [];
@@ -838,11 +913,21 @@ async function buildCategoryRanking(categoryId) {
   if (!catParticipants?.length) return [];
 
   const participantIds = catParticipants.map((p) => p.id);
-  const { firstTimes, secondTimes } = await loadFirstAndSecondTimes(categoryId, participantIds);
+  const { firstTimes, secondTimes } = await loadFirstAndSecondTimes(category, participantIds);
+  const secondRoundActive = isRoundAllowedForCategory(category, 'second_run');
 
   const rankedByFirst = [...catParticipants]
     .filter((p) => Number.isFinite(firstTimes.get(p.id)))
     .sort((a, b) => firstTimes.get(a.id) - firstTimes.get(b.id));
+
+  if (!secondRoundActive) {
+    return rankedByFirst.map((p, idx) => ({
+      ...p,
+      rank: idx + 1,
+      first_time: firstTimes.get(p.id) ?? null,
+      second_time: null
+    }));
+  }
 
   const topFourIds = new Set(rankedByFirst.slice(0, 4).map((p) => p.id));
 
@@ -876,17 +961,21 @@ async function buildCategoryRanking(categoryId) {
   }));
 }
 
-async function loadFirstAndSecondTimes(categoryId, participantIds) {
-  const { data: firstHeats, error: fhErr } = await supabase.from('heats').select('id').eq('round_type', 'first_run').eq('category_id', categoryId);
+async function loadFirstAndSecondTimes(category, participantIds) {
+  const { data: firstHeats, error: fhErr } = await supabase.from('heats').select('id').eq('round_type', 'first_run').eq('category_id', category.id);
   if (fhErr) {
     setAdminMessage(fhErr.message, true);
     return { firstTimes: new Map(), secondTimes: new Map() };
   }
 
-  const { data: secondHeats, error: shErr } = await supabase.from('heats').select('id').eq('round_type', 'second_run').eq('category_id', categoryId);
-  if (shErr) {
-    setAdminMessage(shErr.message, true);
-    return { firstTimes: new Map(), secondTimes: new Map() };
+  let secondHeats = [];
+  if (isRoundAllowedForCategory(category, 'second_run')) {
+    const { data, error: shErr } = await supabase.from('heats').select('id').eq('round_type', 'second_run').eq('category_id', category.id);
+    if (shErr) {
+      setAdminMessage(shErr.message, true);
+      return { firstTimes: new Map(), secondTimes: new Map() };
+    }
+    secondHeats = data || [];
   }
 
   const firstTimes = await loadTimesMap(firstHeats.map((h) => h.id), participantIds);
@@ -928,7 +1017,7 @@ async function exportRankingsPdf() {
   doc.setFontSize(11);
 
   for (const category of categories) {
-    const ranking = await buildCategoryRanking(category.id);
+    const ranking = await buildCategoryRanking(category);
     if (!ranking.length) continue;
 
     if (y > 720) {
@@ -949,7 +1038,8 @@ async function exportRankingsPdf() {
         doc.addPage();
         y = 40;
       }
-      const line = `${row.rank} | ${row.start_number ?? '-'} | ${row.last_name} ${row.first_name} | ${formatTime(row.first_time)} | ${formatTime(row.second_time)}`;
+      const secondVal = isRoundAllowedForCategory(category, 'second_run') ? formatTime(row.second_time) : '-';
+      const line = `${row.rank} | ${row.start_number ?? '-'} | ${row.last_name} ${row.first_name} | ${formatTime(row.first_time)} | ${secondVal}`;
       doc.text(line, 50, y);
       y += 13;
     }
@@ -979,22 +1069,26 @@ function categoryById(categoryId) {
 }
 
 async function findCategoryIdByProfile(gender, age) {
+  const matched = categories
+    .filter((category) => isGenderAllowedInCategory(category, gender) && age >= category.min_age && age <= category.max_age)
+    .sort((a, b) => b.min_age - a.min_age)[0];
+
+  if (matched) {
+    return matched.id;
+  }
+
   const { data, error } = await supabase
     .from('categories')
-    .select('id')
-    .eq('gender', gender)
+    .select('id,gender_mode,min_age,max_age')
     .lte('min_age', age)
-    .gte('max_age', age)
-    .order('min_age', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .gte('max_age', age);
 
   if (error) {
     setAdminMessage(`Kategorie konnte nicht automatisch zugeordnet werden: ${error.message}`, true);
     return null;
   }
 
-  return data?.id ?? null;
+  return (data || []).find((row) => isGenderAllowedInCategory(row, gender))?.id ?? null;
 }
 
 async function getParticipantsForCategory(categoryId) {
@@ -1016,7 +1110,7 @@ async function getParticipantsForCategory(categoryId) {
 
   const filtered = (data || []).filter((participant) => {
     if (participant.category_id === categoryId) return true;
-    if (participant.gender !== category.gender) return false;
+    if (!isGenderAllowedInCategory(category, participant.gender)) return false;
 
     const participantAge = resolveAge(participant);
     return participantAge >= category.min_age && participantAge <= category.max_age;
@@ -1031,7 +1125,24 @@ async function getParticipantsForCategory(categoryId) {
 }
 
 function findCategoryForParticipant(gender, age) {
-  return categories.find((c) => c.gender === gender && age >= c.min_age && age <= c.max_age) || null;
+  return categories.find((c) => isGenderAllowedInCategory(c, gender) && age >= c.min_age && age <= c.max_age) || null;
+}
+
+function isGenderAllowedInCategory(category, gender) {
+  if (category.gender_mode === 'mixed') return true;
+  return category.gender_mode === gender;
+}
+
+function isRoundAllowedForCategory(category, roundType) {
+  if (!category) return false;
+  if (roundType === 'first_run') return Boolean(category.has_run_1 ?? true);
+  if (roundType === 'second_run') return Boolean(category.has_run_2);
+  if (roundType === 'kings_run') return Boolean(category.has_kings_run);
+  return false;
+}
+
+function roundSummary(category) {
+  return ROUND_ORDER.filter((roundType) => isRoundAllowedForCategory(category, roundType)).map(roundLabel).join(', ');
 }
 
 function resolveAge(participant) {
@@ -1052,6 +1163,13 @@ function formatTime(timeValue) {
   return Number.isFinite(Number(timeValue)) ? Number(timeValue).toFixed(2) : '-';
 }
 
+function genderModeLabel(mode) {
+  if (mode === 'male') return 'Männlich';
+  if (mode === 'female') return 'Weiblich';
+  if (mode === 'mixed') return 'Gemischt';
+  return '-';
+}
+
 function genderLabel(gender) {
   return gender === 'male' ? 'Männlich' : gender === 'female' ? 'Weiblich' : '-';
 }
@@ -1065,8 +1183,7 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-
-async function withLoadingScreen(message, task) {
+async function withLoadingScreen(_message, task) {
   try {
     return await task();
   } catch (error) {
