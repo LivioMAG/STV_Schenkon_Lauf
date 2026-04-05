@@ -37,9 +37,10 @@
           </fieldset>
 
           <label>
-            Geburtsjahr
-            <input id="reg-birth-year" name="birth_year" type="number" min="1900" max="2100" required />
+            Alter
+            <input id="reg-age" name="age" type="number" min="1" max="120" required />
           </label>
+
           <button type="submit">Anmelden</button>
         </form>
 
@@ -81,9 +82,8 @@
           <button class="tab-btn active" data-tab="participants">Anmeldungen</button>
           <button class="tab-btn" data-tab="categories">Kategorien</button>
           <button class="tab-btn" data-tab="numbers">Gesperrte Startnummern</button>
-          <button class="tab-btn" data-tab="heats">Läufe / Startaufstellungen</button>
+          <button class="tab-btn" data-tab="heats">Läufe / Startaufstellung</button>
           <button class="tab-btn" data-tab="pdf">PDF-Export</button>
-          <button class="tab-btn" data-tab="results">Resultate</button>
         </nav>
 
         <section id="tab-participants" class="tab-panel active">
@@ -104,6 +104,7 @@
                   <th>Nachname</th>
                   <th>Vorname</th>
                   <th>Geschlecht</th>
+                  <th>Alter</th>
                   <th>Kategorie</th>
                   <th>Erstellt</th>
                   <th>Aktion</th>
@@ -171,31 +172,25 @@
         <section id="tab-heats" class="tab-panel">
           <div class="toolbar">
             <select id="heats-round-select">
-              <option value="first_run">Erster Lauf</option>
-              <option value="second_run">Zweiter Lauf</option>
+              <option value="first_run">1. Lauf</option>
+              <option value="second_run">2. Lauf</option>
               <option value="kings_run">Königslauf</option>
             </select>
             <select id="heats-category-select"></select>
-            <button id="generate-heats" type="button">Startaufstellungen generieren</button>
-            <button id="load-heats" type="button" class="secondary">Anzeigen</button>
+            <button id="show-lineup" type="button">Startaufstellung anzeigen</button>
+            <button id="save-lineup-times" type="button" class="secondary">Zeiten speichern</button>
+            <button id="calculate-rankings" type="button">Ranglisten berechnen</button>
           </div>
-          <p class="muted">Im Königslauf werden automatisch die 4 schnellsten Zeiten aus dem zweiten Lauf gesetzt.</p>
+          <p class="muted">2. Lauf: automatische Top 4 je Kategorie aus dem 1. Lauf. Königslauf: 4 beste Zeiten von 4 verschiedenen Personen aus dem 2. Lauf.</p>
           <div id="heats-output"></div>
+          <h3>Rangliste Kategorie</h3>
+          <div id="category-ranking-output"></div>
         </section>
 
         <section id="tab-pdf" class="tab-panel">
-          <p class="muted">Exportiert alle aktuell vorhandenen Startaufstellungen als PDF.</p>
+          <p class="muted">Exportiert die fertigen Ranglisten pro Kategorie als PDF.</p>
           <button id="export-pdf" type="button">PDF exportieren</button>
           <p id="pdf-message" class="message" aria-live="polite"></p>
-        </section>
-
-        <section id="tab-results" class="tab-panel">
-          <div class="toolbar">
-            <select id="results-heat-select"></select>
-            <button id="load-results" type="button" class="secondary">Lauf laden</button>
-            <button id="save-results" type="button">Zeiten speichern</button>
-          </div>
-          <div id="results-editor"></div>
         </section>
 
         <p id="admin-message" class="message" aria-live="polite"></p>

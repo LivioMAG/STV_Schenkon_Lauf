@@ -1,14 +1,13 @@
 const DISTANCE_LABEL = { 60: '60m', 80: '80m', 100: '100m' };
 const ROUND_TYPES = {
-  first_run: 'Erster Lauf',
-  second_run: 'Zweiter Lauf',
+  first_run: '1. Lauf',
+  second_run: '2. Lauf',
   kings_run: 'Königslauf'
 };
 
 let supabase;
 let categories = [];
 let participants = [];
-let heatsCache = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -55,13 +54,11 @@ function wireCommonEvents() {
   $('blocked-number-form').addEventListener('submit', saveBlockedNumber);
 
   $('heats-round-select').addEventListener('change', handleRoundFilterChange);
-  $('generate-heats').addEventListener('click', generateHeats);
-  $('load-heats').addEventListener('click', loadAndRenderHeats);
+  $('show-lineup').addEventListener('click', showStartLineup);
+  $('save-lineup-times').addEventListener('click', saveLineupTimes);
+  $('calculate-rankings').addEventListener('click', loadCategoryRanking);
 
-  $('export-pdf').addEventListener('click', exportHeatsAsPdf);
-
-  $('load-results').addEventListener('click', loadResultsEditor);
-  $('save-results').addEventListener('click', saveResults);
+  $('export-pdf').addEventListener('click', exportRankingsPdf);
 }
 
 async function restoreSession() {
@@ -84,23 +81,26 @@ async function onPublicRegistration(event) {
   const lastName = $('reg-last-name').value.trim();
   const firstName = $('reg-first-name').value.trim();
   const gender = document.querySelector('input[name="gender"]:checked')?.value;
-  const birthYear = Number($('reg-birth-year').value);
+  const age = Number($('reg-age').value);
+
+  if (!lastName || !firstName || !gender || !Number.isInteger(age)) {
+    $('public-message').textContent = 'Bitte Nachname, Vorname, Geschlecht und Alter ausfüllen.';
+    return;
+  }
+
+  if (age < 1 || age > 120) {
+    $('public-message').textContent = 'Alter muss zwischen 1 und 120 liegen.';
+    return;
+  }
 
   const currentYear = new Date().getFullYear();
-  if (!lastName || !firstName || !gender || !Number.isInteger(birthYear)) {
-    $('public-message').textContent = 'Bitte Nachname, Vorname, Geschlecht und Geburtsjahr ausfüllen.';
-    return;
-  }
-
-  if (birthYear < 1900 || birthYear > currentYear) {
-    $('public-message').textContent = `Geburtsjahr muss zwischen 1900 und ${currentYear} liegen.`;
-    return;
-  }
+  const birthYear = currentYear - age;
 
   const { error } = await supabase.from('participants').insert({
     last_name: lastName,
     first_name: firstName,
     gender,
+    age,
     birth_year: birthYear
   });
 
@@ -157,14 +157,14 @@ function setAdminMessage(message, isError = false) {
 }
 
 async function loadAllAdminData() {
-  await Promise.all([loadCategories(), loadParticipants(), loadBlockedNumbers(), loadHeatsForSelectors()]);
+  await Promise.all([loadCategories(), loadParticipants(), loadBlockedNumbers()]);
   handleRoundFilterChange();
 }
 
 async function loadParticipants() {
   const { data, error } = await supabase
     .from('participants')
-    .select('id,last_name,first_name,gender,birth_year,start_number,category_id,created_at,categories(name,distance,min_age,max_age)')
+    .select('id,last_name,first_name,gender,age,birth_year,start_number,category_id,created_at,categories(name,distance,min_age,max_age)')
     .order('created_at', { ascending: false });
 
   if (error) return setAdminMessage(error.message, true);
@@ -188,7 +188,7 @@ function renderParticipantsTable() {
   for (const p of filtered) {
     const tr = document.createElement('tr');
     const created = new Date(p.created_at).toLocaleString('de-CH');
-    const age = calculateAge(p.birth_year);
+    const age = resolveAge(p);
     const categoryLabel = p.categories
       ? `${p.categories.name} (${DISTANCE_LABEL[p.categories.distance]}, ${p.categories.min_age}-${p.categories.max_age}J)`
       : '-';
@@ -197,7 +197,8 @@ function renderParticipantsTable() {
       <td>${p.start_number ?? '-'}</td>
       <td>${escapeHtml(p.last_name)}</td>
       <td>${escapeHtml(p.first_name)}</td>
-      <td>${genderLabel(p.gender)} (${age}J)</td>
+      <td>${genderLabel(p.gender)}</td>
+      <td>${age}J</td>
       <td>${categoryLabel}</td>
       <td>${created}</td>
       <td>
@@ -222,10 +223,9 @@ async function openParticipantEdit(participant) {
   const gender = prompt('Geschlecht (male/female):', participant.gender);
   if (!gender) return;
 
-  const birthYear = Number(prompt('Geburtsjahr:', String(participant.birth_year ?? '')));
-  if (!Number.isInteger(birthYear)) return;
+  const age = Number(prompt('Alter:', String(resolveAge(participant))));
+  if (!Number.isInteger(age) || age < 1 || age > 120) return;
 
-  const age = calculateAge(birthYear);
   const suggested = findCategoryForParticipant(gender, age)?.id ?? participant.category_id;
   const categoryInput = window.prompt(
     `Kategorie-ID setzen (aktuell: ${participant.category_id ?? 'keine'})\nVorschlag anhand Alter/Geschlecht: ${suggested ?? '-'}\nVerfügbare Kategorien:\n${categories
@@ -235,12 +235,15 @@ async function openParticipantEdit(participant) {
   );
 
   const categoryId = categoryInput ? Number(categoryInput) : null;
+  const birthYear = new Date().getFullYear() - age;
+
   const { error } = await supabase
     .from('participants')
     .update({
       last_name: lastName.trim() || participant.last_name,
       first_name: firstName.trim() || participant.first_name,
       gender,
+      age,
       birth_year: birthYear,
       category_id: Number.isNaN(categoryId) ? null : categoryId
     })
@@ -399,325 +402,545 @@ function renderCategorySelectors() {
 function handleRoundFilterChange() {
   const isKings = $('heats-round-select').value === 'kings_run';
   $('heats-category-select').disabled = isKings;
+  $('category-ranking-output').innerHTML = '';
 }
 
-async function generateHeats() {
+async function showStartLineup() {
   const roundType = $('heats-round-select').value;
-
-  if (roundType === 'kings_run') {
-    await generateKingsRun();
-    return;
-  }
-
   const categoryId = Number($('heats-category-select').value);
-  if (!categoryId) {
+
+  if (roundType !== 'kings_run' && !categoryId) {
     return setAdminMessage('Bitte zuerst eine Kategorie auswählen.', true);
   }
 
-  const { data: participantsData, error: pError } = await supabase
-    .from('participants')
-    .select('id,last_name,first_name,start_number,gender')
-    .eq('category_id', categoryId)
-    .order('start_number', { ascending: true });
-
-  if (pError) return setAdminMessage(pError.message, true);
-  if (!participantsData?.length) return setAdminMessage('Keine Teilnehmenden in dieser Kategorie.', true);
-
-  const chunks = chunkForHeats(participantsData);
-
-  const { data: existingHeats, error: existingErr } = await supabase
-    .from('heats')
-    .select('id')
-    .eq('category_id', categoryId)
-    .eq('round_type', roundType);
-  if (existingErr) return setAdminMessage(existingErr.message, true);
-
-  const existingIds = (existingHeats || []).map((h) => h.id);
-  if (existingIds.length) {
-    await supabase.from('heat_entries').delete().in('heat_id', existingIds);
-    await supabase.from('results').delete().in('heat_id', existingIds);
-    const { error: deleteHeatErr } = await supabase.from('heats').delete().in('id', existingIds);
-    if (deleteHeatErr) return setAdminMessage(deleteHeatErr.message, true);
+  const lineup = await getLineupParticipants(roundType, Number.isNaN(categoryId) ? null : categoryId);
+  if (!lineup.length) {
+    $('heats-output').innerHTML = '<p class="muted">Keine Teilnehmenden für diese Auswahl vorhanden.</p>';
+    return setAdminMessage('Keine Teilnehmenden für diese Auswahl vorhanden.', true);
   }
 
-  for (let i = 0; i < chunks.length; i += 1) {
-    const { data: heatInsert, error: heatErr } = await supabase
-      .from('heats')
-      .insert({
-        category_id: categoryId,
-        round_type: roundType,
-        heat_number: i + 1
-      })
-      .select('id')
-      .single();
-
-    if (heatErr) return setAdminMessage(heatErr.message, true);
-
-    const entries = chunks[i].map((participant, index) => ({
-      heat_id: heatInsert.id,
-      participant_id: participant.id,
-      lane_or_position: index + 1
-    }));
-
-    const { error: entryErr } = await supabase.from('heat_entries').insert(entries);
-    if (entryErr) return setAdminMessage(entryErr.message, true);
-  }
-
-  setAdminMessage('Startaufstellungen neu generiert.');
-  await loadAndRenderHeats();
-  await loadHeatsForSelectors();
+  await ensureHeatAndEntries(roundType, roundType === 'kings_run' ? null : categoryId, lineup);
+  await renderLineupTable(roundType, lineup);
+  setAdminMessage('Startaufstellung geladen.');
 }
 
-async function generateKingsRun() {
-  const { data: topResults, error } = await supabase
-    .from('results')
-    .select('participant_id,time_value,participants(id,last_name,first_name,start_number),heats!inner(round_type)')
-    .eq('heats.round_type', 'second_run')
-    .order('time_value', { ascending: true })
-    .limit(4);
-
-  if (error) return setAdminMessage(`Königslauf-Selektion fehlgeschlagen: ${error.message}`, true);
-
-  if (!topResults?.length || topResults.length < 4) {
-    return setAdminMessage('Für den Königslauf werden mindestens 4 Zeiten aus dem zweiten Lauf benötigt.', true);
+async function getLineupParticipants(roundType, categoryId) {
+  if (roundType === 'first_run') {
+    const { data, error } = await supabase
+      .from('participants')
+      .select('id,last_name,first_name,start_number,gender,category_id')
+      .eq('category_id', categoryId)
+      .order('start_number', { ascending: true });
+    if (error) {
+      setAdminMessage(error.message, true);
+      return [];
+    }
+    return data || [];
   }
 
-  const { data: existingKings, error: existingErr } = await supabase.from('heats').select('id').eq('round_type', 'kings_run');
-  if (existingErr) return setAdminMessage(existingErr.message, true);
+  if (roundType === 'second_run') {
+    const topFour = await getTopParticipantsFromFirstRun(categoryId, 4);
+    return topFour;
+  }
 
-  const existingIds = (existingKings || []).map((h) => h.id);
+  return getKingsRunQualifiedParticipants();
+}
+
+async function getTopParticipantsFromFirstRun(categoryId, limitCount) {
+  const { data: firstRunHeats, error: hError } = await supabase
+    .from('heats')
+    .select('id')
+    .eq('round_type', 'first_run')
+    .eq('category_id', categoryId);
+  if (hError) {
+    setAdminMessage(hError.message, true);
+    return [];
+  }
+
+  const heatIds = (firstRunHeats || []).map((h) => h.id);
+  if (!heatIds.length) {
+    setAdminMessage('Für diese Kategorie gibt es noch keinen 1. Lauf.', true);
+    return [];
+  }
+
+  const { data: results, error: rError } = await supabase
+    .from('results')
+    .select('participant_id,time_value,participants(id,last_name,first_name,start_number,gender,category_id)')
+    .in('heat_id', heatIds)
+    .order('time_value', { ascending: true });
+  if (rError) {
+    setAdminMessage(rError.message, true);
+    return [];
+  }
+
+  const uniqueParticipants = [];
+  const seen = new Set();
+  for (const row of results || []) {
+    if (seen.has(row.participant_id)) continue;
+    seen.add(row.participant_id);
+    uniqueParticipants.push(row.participants);
+  }
+
+  if (uniqueParticipants.length < limitCount) {
+    setAdminMessage('Für den 2. Lauf werden genau 4 Zeiten aus dem 1. Lauf benötigt.', true);
+    return [];
+  }
+
+  return uniqueParticipants.slice(0, limitCount);
+}
+
+async function getKingsRunQualifiedParticipants() {
+  const { data: secondRunHeats, error: hError } = await supabase
+    .from('heats')
+    .select('id')
+    .eq('round_type', 'second_run');
+
+  if (hError) {
+    setAdminMessage(hError.message, true);
+    return [];
+  }
+
+  const heatIds = (secondRunHeats || []).map((h) => h.id);
+  if (!heatIds.length) {
+    setAdminMessage('Für den Königslauf braucht es Resultate aus dem 2. Lauf.', true);
+    return [];
+  }
+
+  const { data: results, error: rError } = await supabase
+    .from('results')
+    .select('participant_id,time_value,participants(id,last_name,first_name,start_number,gender,category_id)')
+    .in('heat_id', heatIds)
+    .order('time_value', { ascending: true });
+
+  if (rError) {
+    setAdminMessage(rError.message, true);
+    return [];
+  }
+
+  const topUnique = [];
+  const seen = new Set();
+  for (const row of results || []) {
+    if (seen.has(row.participant_id)) continue;
+    seen.add(row.participant_id);
+    topUnique.push(row.participants);
+    if (topUnique.length === 4) break;
+  }
+
+  if (topUnique.length < 4) {
+    setAdminMessage('Für den Königslauf werden 4 verschiedene Teilnehmende mit Zeiten aus dem 2. Lauf benötigt.', true);
+    return [];
+  }
+
+  return topUnique;
+}
+
+async function ensureHeatAndEntries(roundType, categoryId, lineup) {
+  let query = supabase.from('heats').select('id').eq('round_type', roundType);
+  query = categoryId === null ? query.is('category_id', null) : query.eq('category_id', categoryId);
+
+  const { data: existingHeats, error: heatErr } = await query;
+
+  if (heatErr) {
+    setAdminMessage(heatErr.message, true);
+    return null;
+  }
+
+  const lineupIds = lineup.map((p) => p.id);
+  if (existingHeats?.length === 1) {
+    const existingHeatId = existingHeats[0].id;
+    const { data: currentEntries, error: entryErr } = await supabase
+      .from('heat_entries')
+      .select('participant_id,lane_or_position')
+      .eq('heat_id', existingHeatId)
+      .order('lane_or_position', { ascending: true });
+
+    if (entryErr) {
+      setAdminMessage(entryErr.message, true);
+      return null;
+    }
+
+    const currentIds = (currentEntries || []).map((e) => e.participant_id);
+    if (arraysEqual(currentIds, lineupIds)) {
+      return existingHeatId;
+    }
+  }
+
+  const heatId = await replaceWithSingleHeat(existingHeats || [], roundType, categoryId, lineup);
+  return heatId;
+}
+
+async function replaceWithSingleHeat(existingHeats, roundType, categoryId, lineup) {
+  const existingIds = existingHeats.map((h) => h.id);
   if (existingIds.length) {
     await supabase.from('heat_entries').delete().in('heat_id', existingIds);
     await supabase.from('results').delete().in('heat_id', existingIds);
     const { error: deleteErr } = await supabase.from('heats').delete().in('id', existingIds);
-    if (deleteErr) return setAdminMessage(deleteErr.message, true);
+    if (deleteErr) {
+      setAdminMessage(deleteErr.message, true);
+      return null;
+    }
   }
 
-  const { data: kingsHeat, error: createErr } = await supabase
+  const { data: insertedHeat, error: insertHeatErr } = await supabase
     .from('heats')
-    .insert({
-      category_id: null,
-      round_type: 'kings_run',
-      heat_number: 1
-    })
+    .insert({ category_id: categoryId, round_type: roundType, heat_number: 1 })
     .select('id')
     .single();
 
-  if (createErr) return setAdminMessage(createErr.message, true);
+  if (insertHeatErr) {
+    setAdminMessage(insertHeatErr.message, true);
+    return null;
+  }
 
-  const entries = topResults.map((row, index) => ({
-    heat_id: kingsHeat.id,
-    participant_id: row.participant_id,
-    lane_or_position: index + 1
+  const entries = lineup.map((participant, idx) => ({
+    heat_id: insertedHeat.id,
+    participant_id: participant.id,
+    lane_or_position: idx + 1
   }));
 
   const { error: entryErr } = await supabase.from('heat_entries').insert(entries);
-  if (entryErr) return setAdminMessage(entryErr.message, true);
-
-  setAdminMessage('Königslauf wurde mit den 4 schnellsten Zeiten des zweiten Laufs erstellt.');
-  await loadAndRenderHeats();
-  await loadHeatsForSelectors();
-}
-
-function chunkForHeats(list) {
-  const output = [];
-  let idx = 0;
-  while (idx < list.length) {
-    const remaining = list.length - idx;
-    let size;
-    if (remaining === 5) size = 3;
-    else if (remaining <= 4) size = remaining;
-    else size = 4;
-
-    output.push(list.slice(idx, idx + size));
-    idx += size;
-  }
-  return output;
-}
-
-async function loadAndRenderHeats() {
-  const roundType = $('heats-round-select').value;
-  const categoryId = Number($('heats-category-select').value);
-
-  let query = supabase
-    .from('heats')
-    .select(
-      'id,heat_number,round_type,categories(name,distance),heat_entries(lane_or_position,participants(last_name,first_name,start_number,gender))'
-    )
-    .eq('round_type', roundType)
-    .order('heat_number');
-
-  if (roundType !== 'kings_run') {
-    if (!categoryId) return;
-    query = query.eq('category_id', categoryId);
+  if (entryErr) {
+    setAdminMessage(entryErr.message, true);
+    return null;
   }
 
-  const { data, error } = await query;
-  if (error) return setAdminMessage(error.message, true);
-
-  heatsCache = data || [];
-  const out = $('heats-output');
-  out.innerHTML = '';
-
-  for (const heat of heatsCache) {
-    const card = document.createElement('article');
-    card.className = 'heat-card';
-    const items = (heat.heat_entries || [])
-      .sort((a, b) => a.lane_or_position - b.lane_or_position)
-      .map(
-        (entry) =>
-          `<li>Bahn ${entry.lane_or_position}: #${entry.participants.start_number} ${escapeHtml(entry.participants.last_name)} ${escapeHtml(entry.participants.first_name)} (${genderLabel(entry.participants.gender)})</li>`
-      )
-      .join('');
-
-    const categoryTitle = heat.categories ? `${heat.categories.name} - ${DISTANCE_LABEL[heat.categories.distance]}` : 'Global';
-    card.innerHTML = `
-      <h4>${escapeHtml(categoryTitle)} - ${roundLabel(heat.round_type)} - Lauf ${heat.heat_number}</h4>
-      <ol>${items}</ol>
-    `;
-    out.appendChild(card);
-  }
+  return insertedHeat.id;
 }
 
-async function exportHeatsAsPdf() {
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-  let y = 40;
+async function renderLineupTable(roundType, lineup) {
+  const resultMaps = await loadResultMapsForLineup(lineup.map((p) => p.id));
+
+  const categoryTitle = roundType === 'kings_run'
+    ? 'Königslauf - 4 Qualifizierte (verschiedene Personen)'
+    : `${escapeHtml(selectedCategory()?.name || '')} - ${roundLabel(roundType)}`;
+
+  const rows = lineup
+    .map((p, idx) => {
+      const firstValue = resultMaps.first.get(p.id) ?? '';
+      const secondValue = resultMaps.second.get(p.id) ?? '';
+      const kingsValue = resultMaps.kings.get(p.id) ?? '';
+      return `
+      <tr>
+        <td>${idx + 1}</td>
+        <td>${p.start_number ?? '-'}</td>
+        <td>${escapeHtml(p.last_name)}</td>
+        <td>${escapeHtml(p.first_name)}</td>
+        <td>${genderLabel(p.gender)}</td>
+        <td><input class="small-input" type="number" min="0" step="0.01" data-time-round="first_run" data-participant-id="${p.id}" value="${firstValue}" /></td>
+        <td><input class="small-input" type="number" min="0" step="0.01" data-time-round="second_run" data-participant-id="${p.id}" value="${secondValue}" /></td>
+        <td><input class="small-input" type="number" min="0" step="0.01" data-time-round="kings_run" data-participant-id="${p.id}" value="${kingsValue}" /></td>
+      </tr>`;
+    })
+    .join('');
+
+  $('heats-output').innerHTML = `
+    <article class="heat-card">
+      <h4>${categoryTitle}</h4>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Pos.</th>
+              <th>Startnr.</th>
+              <th>Nachname</th>
+              <th>Vorname</th>
+              <th>Geschlecht</th>
+              <th>1. Laufzeit</th>
+              <th>2. Laufzeit</th>
+              <th>Königslauf-Zeit</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </article>
+  `;
+}
+
+async function loadResultMapsForLineup(participantIds) {
+  if (!participantIds.length) {
+    return { first: new Map(), second: new Map(), kings: new Map() };
+  }
 
   const { data, error } = await supabase
-    .from('heats')
-    .select('heat_number,round_type,categories(name,distance),heat_entries(lane_or_position,participants(last_name,first_name,start_number,gender))')
-    .order('round_type')
-    .order('heat_number');
+    .from('results')
+    .select('participant_id,time_value,heats!inner(round_type)')
+    .in('participant_id', participantIds)
+    .in('heats.round_type', ['first_run', 'second_run', 'kings_run']);
 
   if (error) {
-    $('pdf-message').textContent = `PDF-Export fehlgeschlagen: ${error.message}`;
-    return;
+    setAdminMessage(error.message, true);
+    return { first: new Map(), second: new Map(), kings: new Map() };
   }
 
-  doc.setFontSize(16);
-  doc.text('Startaufstellungen Sprinttag', 40, y);
-  y += 30;
-  doc.setFontSize(11);
+  const maps = { first: new Map(), second: new Map(), kings: new Map() };
+  for (const row of data || []) {
+    const rt = row.heats.round_type;
+    if (rt === 'first_run') maps.first.set(row.participant_id, row.time_value);
+    if (rt === 'second_run') maps.second.set(row.participant_id, row.time_value);
+    if (rt === 'kings_run') maps.kings.set(row.participant_id, row.time_value);
+  }
+  return maps;
+}
 
-  for (const heat of data || []) {
-    const categoryTitle = heat.categories ? `${heat.categories.name} (${DISTANCE_LABEL[heat.categories.distance]})` : 'Kategorienübergreifend';
-    const title = `${categoryTitle} - ${roundLabel(heat.round_type)} - Lauf ${heat.heat_number}`;
-    if (y > 760) {
-      doc.addPage();
-      y = 40;
-    }
-
-    doc.setFont(undefined, 'bold');
-    doc.text(title, 40, y);
-    y += 16;
-    doc.setFont(undefined, 'normal');
-
-    for (const entry of (heat.heat_entries || []).sort((a, b) => a.lane_or_position - b.lane_or_position)) {
-      const line = `Bahn ${entry.lane_or_position} | #${entry.participants.start_number} | ${entry.participants.last_name} ${entry.participants.first_name} | ${genderLabel(entry.participants.gender)}`;
-      doc.text(line, 50, y);
-      y += 14;
-    }
-    y += 12;
+async function saveLineupTimes() {
+  const roundType = $('heats-round-select').value;
+  const categoryId = roundType === 'kings_run' ? null : Number($('heats-category-select').value);
+  if (roundType !== 'kings_run' && !categoryId) {
+    return setAdminMessage('Bitte zuerst Kategorie und Startaufstellung wählen.', true);
   }
 
-  doc.save(`startaufstellungen-${new Date().toISOString().slice(0, 10)}.pdf`);
-  $('pdf-message').textContent = 'PDF wurde erzeugt und heruntergeladen.';
-}
+  const participantIds = [...new Set([...$('heats-output').querySelectorAll('input[data-participant-id]')].map((i) => Number(i.dataset.participantId)))];
+  if (!participantIds.length) return setAdminMessage('Bitte zuerst Startaufstellung anzeigen.', true);
 
-async function loadHeatsForSelectors() {
-  const { data, error } = await supabase
-    .from('heats')
-    .select('id,heat_number,round_type,categories(name,distance)')
-    .order('round_type')
-    .order('heat_number');
-
-  if (error) return setAdminMessage(error.message, true);
-
-  const select = $('results-heat-select');
-  select.innerHTML = '<option value="">Lauf wählen</option>';
-  for (const h of data || []) {
-    const option = document.createElement('option');
-    option.value = h.id;
-    const categoryLabel = h.categories ? `${h.categories.name} ${DISTANCE_LABEL[h.categories.distance]}` : 'Global';
-    option.textContent = `${categoryLabel} - ${roundLabel(h.round_type)} - Lauf ${h.heat_number}`;
-    select.appendChild(option);
+  const heatIds = await getHeatIdsForRound(roundType, categoryId);
+  for (const heatId of heatIds) {
+    const { error: delErr } = await supabase.from('results').delete().eq('heat_id', heatId);
+    if (delErr) return setAdminMessage(delErr.message, true);
   }
-}
 
-async function loadResultsEditor() {
-  const heatId = Number($('results-heat-select').value);
-  if (!heatId) return;
+  const payload = [];
+  for (const participantId of participantIds) {
+    const input = $('heats-output').querySelector(`input[data-time-round="${roundType}"][data-participant-id="${participantId}"]`);
+    if (!input?.value) continue;
+    payload.push({ participant_id: participantId, time_value: Number(input.value) });
+  }
 
-  const [{ data: entries, error: entryErr }, { data: existingResults, error: resultsErr }] = await Promise.all([
-    supabase
-      .from('heat_entries')
-      .select('participant_id,lane_or_position,participants(last_name,first_name,start_number)')
-      .eq('heat_id', heatId)
-      .order('lane_or_position'),
-    supabase.from('results').select('participant_id,time_value').eq('heat_id', heatId)
-  ]);
-
-  if (entryErr || resultsErr) return setAdminMessage((entryErr || resultsErr).message, true);
-
-  const resultMap = new Map((existingResults || []).map((r) => [r.participant_id, r.time_value]));
-  const editor = $('results-editor');
-  editor.innerHTML = '';
-
-  const wrap = document.createElement('div');
-  wrap.className = 'table-wrap';
-
-  const table = document.createElement('table');
-  table.innerHTML = `
-    <thead><tr><th>Bahn</th><th>Startnr.</th><th>Nachname</th><th>Vorname</th><th>Zeit (s)</th></tr></thead>
-    <tbody>
-      ${(entries || [])
-        .map(
-          (entry) => `
-        <tr>
-          <td>${entry.lane_or_position}</td>
-          <td>${entry.participants.start_number}</td>
-          <td>${escapeHtml(entry.participants.last_name)}</td>
-          <td>${escapeHtml(entry.participants.first_name)}</td>
-          <td><input class="small-input" type="number" min="0" step="0.01" data-participant-id="${entry.participant_id}" value="${resultMap.get(entry.participant_id) ?? ''}" /></td>
-        </tr>`
-        )
-        .join('')}
-    </tbody>
-  `;
-
-  wrap.appendChild(table);
-  editor.appendChild(wrap);
-}
-
-async function saveResults() {
-  const heatId = Number($('results-heat-select').value);
-  if (!heatId) return setAdminMessage('Bitte zuerst einen Lauf auswählen.', true);
-
-  const inputs = [...$('results-editor').querySelectorAll('input[data-participant-id]')];
-  if (!inputs.length) return setAdminMessage('Bitte erst Lauf laden.', true);
-
-  const payload = inputs
-    .map((input) => ({
-      heat_id: heatId,
-      participant_id: Number(input.dataset.participantId),
-      time_value: input.value ? Number(input.value) : null
-    }))
-    .filter((row) => row.time_value !== null);
-
-  const { error: deleteErr } = await supabase.from('results').delete().eq('heat_id', heatId);
-  if (deleteErr) return setAdminMessage(`Alte Resultate konnten nicht gelöscht werden: ${deleteErr.message}`, true);
+  const currentHeatId = await ensureCurrentHeat(roundType, categoryId, participantIds);
+  if (!currentHeatId) return;
 
   if (payload.length) {
-    const { error } = await supabase.from('results').insert(payload);
-    if (error) return setAdminMessage(`Resultate konnten nicht gespeichert werden: ${error.message}`, true);
+    const insertRows = payload.map((row) => ({ ...row, heat_id: currentHeatId }));
+    const { error: insertErr } = await supabase.from('results').insert(insertRows);
+    if (insertErr) return setAdminMessage(insertErr.message, true);
   }
 
   setAdminMessage('Zeiten gespeichert.');
 }
 
+async function ensureCurrentHeat(roundType, categoryId, participantIds) {
+  const { data: heatData, error } = await supabase
+    .from('heats')
+    .select('id')
+    .eq('round_type', roundType)
+    .eq('heat_number', 1)
+    .match(categoryId === null ? { category_id: null } : { category_id: categoryId })
+    .limit(1);
+
+  if (error) {
+    setAdminMessage(error.message, true);
+    return null;
+  }
+
+  if (heatData?.[0]?.id) return heatData[0].id;
+
+  const lineup = participants.filter((p) => participantIds.includes(p.id));
+  return replaceWithSingleHeat([], roundType, categoryId, lineup);
+}
+
+async function getHeatIdsForRound(roundType, categoryId) {
+  const query = supabase.from('heats').select('id').eq('round_type', roundType);
+  const { data, error } = await (categoryId === null ? query.is('category_id', null) : query.eq('category_id', categoryId));
+  if (error) {
+    setAdminMessage(error.message, true);
+    return [];
+  }
+  return (data || []).map((h) => h.id);
+}
+
+async function loadCategoryRanking() {
+  const category = selectedCategory();
+  if (!category) {
+    $('category-ranking-output').innerHTML = '<p class="muted">Bitte eine Kategorie auswählen.</p>';
+    return;
+  }
+
+  const ranking = await buildCategoryRanking(category.id);
+  if (!ranking.length) {
+    $('category-ranking-output').innerHTML = '<p class="muted">Noch keine Zeiten für diese Kategorie vorhanden.</p>';
+    return;
+  }
+
+  const rows = ranking
+    .map(
+      (row) => `
+      <tr>
+        <td>${row.rank}</td>
+        <td>${row.start_number ?? '-'}</td>
+        <td>${escapeHtml(row.last_name)}</td>
+        <td>${escapeHtml(row.first_name)}</td>
+        <td>${formatTime(row.first_time)}</td>
+        <td>${formatTime(row.second_time)}</td>
+      </tr>`
+    )
+    .join('');
+
+  $('category-ranking-output').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Rang</th><th>Startnr.</th><th>Nachname</th><th>Vorname</th><th>1. Laufzeit</th><th>2. Laufzeit</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function buildCategoryRanking(categoryId) {
+  const { data: catParticipants, error: pError } = await supabase
+    .from('participants')
+    .select('id,last_name,first_name,start_number')
+    .eq('category_id', categoryId);
+  if (pError) {
+    setAdminMessage(pError.message, true);
+    return [];
+  }
+
+  if (!catParticipants?.length) return [];
+
+  const participantIds = catParticipants.map((p) => p.id);
+  const { firstTimes, secondTimes } = await loadFirstAndSecondTimes(categoryId, participantIds);
+
+  const rankedByFirst = [...catParticipants]
+    .filter((p) => Number.isFinite(firstTimes.get(p.id)))
+    .sort((a, b) => firstTimes.get(a.id) - firstTimes.get(b.id));
+
+  const topFourIds = new Set(rankedByFirst.slice(0, 4).map((p) => p.id));
+
+  const topFour = rankedByFirst
+    .slice(0, 4)
+    .sort((a, b) => {
+      const aSecond = secondTimes.get(a.id);
+      const bSecond = secondTimes.get(b.id);
+      if (Number.isFinite(aSecond) && Number.isFinite(bSecond)) return aSecond - bSecond;
+      if (Number.isFinite(aSecond)) return -1;
+      if (Number.isFinite(bSecond)) return 1;
+      return firstTimes.get(a.id) - firstTimes.get(b.id);
+    });
+
+  const rest = [...catParticipants]
+    .filter((p) => !topFourIds.has(p.id))
+    .sort((a, b) => {
+      const aFirst = firstTimes.get(a.id);
+      const bFirst = firstTimes.get(b.id);
+      if (Number.isFinite(aFirst) && Number.isFinite(bFirst)) return aFirst - bFirst;
+      if (Number.isFinite(aFirst)) return -1;
+      if (Number.isFinite(bFirst)) return 1;
+      return a.start_number - b.start_number;
+    });
+
+  return [...topFour, ...rest].map((p, idx) => ({
+    ...p,
+    rank: idx + 1,
+    first_time: firstTimes.get(p.id) ?? null,
+    second_time: secondTimes.get(p.id) ?? null
+  }));
+}
+
+async function loadFirstAndSecondTimes(categoryId, participantIds) {
+  const { data: firstHeats, error: fhErr } = await supabase.from('heats').select('id').eq('round_type', 'first_run').eq('category_id', categoryId);
+  if (fhErr) {
+    setAdminMessage(fhErr.message, true);
+    return { firstTimes: new Map(), secondTimes: new Map() };
+  }
+
+  const { data: secondHeats, error: shErr } = await supabase.from('heats').select('id').eq('round_type', 'second_run').eq('category_id', categoryId);
+  if (shErr) {
+    setAdminMessage(shErr.message, true);
+    return { firstTimes: new Map(), secondTimes: new Map() };
+  }
+
+  const firstTimes = await loadTimesMap(firstHeats.map((h) => h.id), participantIds);
+  const secondTimes = await loadTimesMap(secondHeats.map((h) => h.id), participantIds);
+  return { firstTimes, secondTimes };
+}
+
+async function loadTimesMap(heatIds, participantIds) {
+  const map = new Map();
+  if (!heatIds.length || !participantIds.length) return map;
+
+  const { data, error } = await supabase
+    .from('results')
+    .select('participant_id,time_value')
+    .in('heat_id', heatIds)
+    .in('participant_id', participantIds)
+    .order('time_value', { ascending: true });
+
+  if (error) {
+    setAdminMessage(error.message, true);
+    return map;
+  }
+
+  for (const row of data || []) {
+    if (!map.has(row.participant_id)) map.set(row.participant_id, Number(row.time_value));
+  }
+
+  return map;
+}
+
+async function exportRankingsPdf() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+
+  let y = 40;
+  doc.setFontSize(16);
+  doc.text('Ranglisten pro Kategorie', 40, y);
+  y += 26;
+  doc.setFontSize(11);
+
+  for (const category of categories) {
+    const ranking = await buildCategoryRanking(category.id);
+    if (!ranking.length) continue;
+
+    if (y > 720) {
+      doc.addPage();
+      y = 40;
+    }
+
+    doc.setFont(undefined, 'bold');
+    doc.text(`${category.name} (${DISTANCE_LABEL[category.distance]})`, 40, y);
+    y += 16;
+    doc.setFont(undefined, 'normal');
+
+    doc.text('Rang | Startnr. | Name | 1. Lauf | 2. Lauf', 50, y);
+    y += 14;
+
+    for (const row of ranking) {
+      if (y > 780) {
+        doc.addPage();
+        y = 40;
+      }
+      const line = `${row.rank} | ${row.start_number ?? '-'} | ${row.last_name} ${row.first_name} | ${formatTime(row.first_time)} | ${formatTime(row.second_time)}`;
+      doc.text(line, 50, y);
+      y += 13;
+    }
+
+    y += 14;
+  }
+
+  doc.save(`ranglisten-${new Date().toISOString().slice(0, 10)}.pdf`);
+  $('pdf-message').textContent = 'PDF mit Ranglisten wurde erzeugt und heruntergeladen.';
+}
+
+function arraysEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function selectedCategory() {
+  const categoryId = Number($('heats-category-select').value);
+  return categories.find((c) => c.id === categoryId) || null;
+}
+
 function findCategoryForParticipant(gender, age) {
   return categories.find((c) => c.gender === gender && age >= c.min_age && age <= c.max_age) || null;
+}
+
+function resolveAge(participant) {
+  if (Number.isInteger(participant.age)) return participant.age;
+  return calculateAge(participant.birth_year);
 }
 
 function roundLabel(roundType) {
@@ -727,6 +950,10 @@ function roundLabel(roundType) {
 function calculateAge(birthYear) {
   const currentYear = new Date().getFullYear();
   return Number.isInteger(birthYear) ? Math.max(0, currentYear - birthYear) : 0;
+}
+
+function formatTime(timeValue) {
+  return Number.isFinite(Number(timeValue)) ? Number(timeValue).toFixed(2) : '-';
 }
 
 function genderLabel(gender) {

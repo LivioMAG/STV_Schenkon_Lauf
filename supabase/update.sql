@@ -19,12 +19,24 @@ $$;
 revoke all on function public.is_admin() from public;
 grant execute on function public.is_admin() to anon, authenticated;
 
+-- 1b) Teilnehmer um separates Alter-Feld ergänzen (falls noch nicht vorhanden)
+alter table public.participants add column if not exists age integer;
+
+update public.participants
+set age = greatest(1, extract(year from now())::int - birth_year)
+where age is null
+  and birth_year is not null;
+
+alter table public.participants alter column age set not null;
+alter table public.participants drop constraint if exists participants_age_check;
+alter table public.participants add constraint participants_age_check check (age between 1 and 120);
+
 -- 2) Tabellenrechte und RLS-Policies für Admin-Tabellen sicherstellen
 grant usage on schema public to anon, authenticated;
 grant usage, select on all sequences in schema public to anon, authenticated;
 
 grant select, insert, update, delete on public.participants to authenticated;
-grant insert (last_name, first_name, gender, birth_year) on public.participants to anon;
+grant insert (last_name, first_name, gender, age, birth_year) on public.participants to anon;
 
 grant select, insert, update, delete on public.categories to authenticated;
 grant select, insert, update, delete on public.blocked_start_numbers to authenticated;
@@ -50,6 +62,7 @@ with check (
   last_name is not null
   and first_name is not null
   and gender in ('male', 'female')
+  and age between 1 and 120
   and birth_year between 1900 and extract(year from now())::int
   and category_id is null
 );
