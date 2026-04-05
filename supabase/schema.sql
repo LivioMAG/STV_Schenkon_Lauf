@@ -4,11 +4,15 @@
 create table if not exists public.categories (
   id bigint generated always as identity primary key,
   name text not null,
-  gender text not null check (gender in ('male', 'female')),
+  gender_mode text not null default 'male' check (gender_mode in ('male', 'female', 'mixed')),
   min_age integer not null check (min_age >= 1),
   max_age integer not null check (max_age >= min_age),
   distance integer not null check (distance in (60, 80, 100)),
-  created_at timestamptz not null default now()
+  has_run_1 boolean not null default true,
+  has_run_2 boolean not null default true,
+  has_kings_run boolean not null default true,
+  created_at timestamptz not null default now(),
+  constraint categories_runs_valid check (has_run_1 = true and (not has_kings_run or has_run_2))
 );
 
 create table if not exists public.participants (
@@ -65,6 +69,10 @@ create table if not exists public.admin_users (
 -- Migrations for older schema versions
 alter table public.categories add column if not exists min_age integer;
 alter table public.categories add column if not exists max_age integer;
+alter table public.categories add column if not exists gender_mode text;
+alter table public.categories add column if not exists has_run_1 boolean;
+alter table public.categories add column if not exists has_run_2 boolean;
+alter table public.categories add column if not exists has_kings_run boolean;
 
 alter table public.participants add column if not exists last_name text;
 alter table public.participants add column if not exists first_name text;
@@ -108,7 +116,11 @@ begin
   execute $sql$
     update public.categories
     set min_age = coalesce(min_age, 1),
-        max_age = coalesce(max_age, greatest(coalesce(min_age, 1), 120))
+        max_age = coalesce(max_age, greatest(coalesce(min_age, 1), 120)),
+        gender_mode = coalesce(gender_mode, (to_jsonb(categories)->>'gender'), 'male'),
+        has_run_1 = coalesce(has_run_1, true),
+        has_run_2 = coalesce(has_run_2, true),
+        has_kings_run = coalesce(has_kings_run, true)
   $sql$;
 
   -- Backfill first_name/last_name from legacy name field
@@ -170,11 +182,23 @@ end $$;
 -- Ensure constraints exist after migration
 alter table public.categories alter column min_age set not null;
 alter table public.categories alter column max_age set not null;
+alter table public.categories alter column gender_mode set not null;
+alter table public.categories alter column has_run_1 set not null;
+alter table public.categories alter column has_run_2 set not null;
+alter table public.categories alter column has_kings_run set not null;
+alter table public.categories alter column gender_mode set default 'male';
+alter table public.categories alter column has_run_1 set default true;
+alter table public.categories alter column has_run_2 set default true;
+alter table public.categories alter column has_kings_run set default true;
 
 alter table public.categories drop constraint if exists categories_min_age_check;
 alter table public.categories add constraint categories_min_age_check check (min_age >= 1);
 alter table public.categories drop constraint if exists categories_max_age_check;
 alter table public.categories add constraint categories_max_age_check check (max_age >= min_age);
+alter table public.categories drop constraint if exists categories_gender_mode_check;
+alter table public.categories add constraint categories_gender_mode_check check (gender_mode in ('male', 'female', 'mixed'));
+alter table public.categories drop constraint if exists categories_runs_valid;
+alter table public.categories add constraint categories_runs_valid check (has_run_1 = true and (not has_kings_run or has_run_2));
 
 alter table public.participants alter column last_name set not null;
 alter table public.participants alter column first_name set not null;
@@ -214,6 +238,16 @@ begin
     select 1
     from information_schema.columns
     where table_schema = 'public'
+      and table_name = 'categories'
+      and column_name = 'gender'
+  ) then
+    alter table public.categories drop column gender;
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
       and table_name = 'participants'
       and column_name = 'name'
   ) then
@@ -243,6 +277,43 @@ end $$;
 
 create unique index if not exists heats_unique_round
 on public.heats (coalesce(category_id, -1), round_type, heat_number);
+
+
+create or replace function public.validate_result_round_allowed()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  category_record record;
+  heat_round text;
+begin
+  select h.round_type, c.has_run_1, c.has_run_2, c.has_kings_run
+    into heat_round, category_record.has_run_1, category_record.has_run_2, category_record.has_kings_run
+  from public.heats h
+  join public.categories c on c.id = h.category_id
+  where h.id = new.heat_id;
+
+  if heat_round is null then
+    raise exception 'Heat % hat keine gültige Kategorie.', new.heat_id;
+  end if;
+
+  if (heat_round = 'first_run' and not category_record.has_run_1)
+     or (heat_round = 'second_run' and not category_record.has_run_2)
+     or (heat_round = 'kings_run' and not category_record.has_kings_run) then
+    raise exception 'Lauf % ist für diese Kategorie deaktiviert.', heat_round;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_validate_result_round_allowed on public.results;
+create trigger trg_validate_result_round_allowed
+before insert or update on public.results
+for each row
+execute function public.validate_result_round_allowed();
 
 -- Startnummern automatisch vergeben und gesperrte Nummern überspringen
 create or replace function public.assign_next_start_number()
@@ -333,7 +404,6 @@ with check (
   and gender in ('male', 'female')
   and age between 1 and 120
   and birth_year between 1900 and extract(year from now())::int
-  and category_id is null
 );
 
 drop policy if exists participants_public_select on public.participants;
