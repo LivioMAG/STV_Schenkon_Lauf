@@ -1074,7 +1074,12 @@ async function withLoadingScreen(message, task) {
   }
 
   textElement.textContent = message || 'Lade ...';
-  overlay.classList.remove('hidden');
+  const showDelayMs = 250;
+  let isOverlayVisible = false;
+  const showTimer = window.setTimeout(() => {
+    overlay.classList.remove('hidden');
+    isOverlayVisible = true;
+  }, showDelayMs);
 
   try {
     return await task();
@@ -1082,6 +1087,9 @@ async function withLoadingScreen(message, task) {
     setAdminMessage(error.message || 'Vorgang fehlgeschlagen.', true);
     return null;
   } finally {
-    overlay.classList.add('hidden');
+    window.clearTimeout(showTimer);
+    if (isOverlayVisible) {
+      overlay.classList.add('hidden');
+    }
   }
 }
