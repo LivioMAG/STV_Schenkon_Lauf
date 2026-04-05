@@ -2,35 +2,18 @@
 
 Web-App für einen Amateur-Sprintanlass (60m, 80m, 100m) mit öffentlicher Anmeldung und Admin-Verwaltung auf Basis von **Vanilla HTML/CSS/JS + Supabase**.
 
-## Funktionen
+## Was wurde fachlich überarbeitet?
 
-- Öffentliche Anmeldung (Name, Geschlecht, optional Geburtsjahr)
-- Admin-Login mit Supabase Auth (E-Mail/Passwort)
-- Admin-Tabs für:
-  - Anmeldungen (Suchen, Filtern, Bearbeiten, Löschen)
-  - Kategorien (CRUD)
-  - gesperrte Startnummern
-  - Startaufstellungen / Läufe (pro Kategorie, deterministisch gruppiert)
-  - PDF-Export der Startaufstellungen
-  - Zeiten / Resultate pro Lauf
-- Startnummern global eindeutig, automatische Vergabe, gesperrte Nummern werden übersprungen
-- Datenmodell bereits vorbereitet für mehrere Runden (z. B. 1. Lauf, 2. Lauf, Königslauf)
-
----
-
-## Projektstruktur
-
-```text
-.
-├── index.html
-├── assets/css/styles.css
-├── js/app.js
-├── config/
-│   ├── public.supabase.json
-│   ├── public.supabase.example.json
-│   └── admin.secret.example.json
-└── supabase/schema.sql
-```
+- Öffentliche Anmeldung funktioniert ohne Login mit Pflichtfeldern: **Nachname, Vorname, Geschlecht (exklusive Auswahl), Geburtsjahr**.
+- Admin-Ansicht nutzt Teilnehmerdaten mit getrenntem Namen (`last_name`, `first_name`) und zeigt die gewünschte Spaltenreihenfolge.
+- Kategorien wurden auf **Altersbereiche** umgestellt (`min_age`, `max_age`) statt Jahrgangsgrenzen.
+- Laufmodell wurde auf `round_type` vereinheitlicht:
+  - `first_run`
+  - `second_run`
+  - `kings_run` (global, kategorienübergreifend)
+- Königslauf kann aus den **4 schnellsten Zeiten des zweiten Laufs** generiert werden.
+- Startnummernlogik bleibt erhalten: global eindeutig, gesperrte Nummern werden nie vergeben.
+- PDF-Export enthält Kategorie, Runde, Laufnummer, Startnummer, Nachname, Vorname, Geschlecht.
 
 ---
 
@@ -40,6 +23,8 @@ Web-App für einen Amateur-Sprintanlass (60m, 80m, 100m) mit öffentlicher Anmel
 
 1. Neues Supabase-Projekt erstellen.
 2. In Supabase → SQL Editor den Inhalt aus `supabase/schema.sql` ausführen.
+
+> `schema.sql` enthält sowohl eine Neuinstallation als auch Migrationen von älteren Ständen (inkl. Backfill für `name` → `first_name`/`last_name` und `round_number` → `round_type`).
 
 ### 2) Frontend-Konfiguration (öffentlich, für Browser)
 
@@ -52,13 +37,10 @@ Datei `config/public.supabase.json` befüllen:
 }
 ```
 
-- Diese Datei wird vom Browser geladen.
-- Enthält **nur** öffentliche Werte (URL + Anon Key).
-
 ### 3) Admin-User in Supabase anlegen
 
 1. Supabase → Authentication → Users: Admin-Benutzer mit E-Mail/Passwort erstellen.
-2. Die User-ID (UUID) kopieren.
+2. User-ID (UUID) kopieren.
 3. SQL ausführen:
 
 ```sql
@@ -66,8 +48,6 @@ insert into public.admin_users (user_id) values ('<AUTH_USER_UUID>');
 ```
 
 ### 4) Lokal starten
-
-Einfach mit einem statischen Server starten (Beispiel):
 
 ```bash
 python3 -m http.server 8080
@@ -77,87 +57,88 @@ Dann öffnen: `http://localhost:8080`
 
 ---
 
-## Datenmodell
+## Datenmodell (Zielstand)
 
-Implementierte Tabellen:
+### participants
+- `id`
+- `last_name`
+- `first_name`
+- `gender`
+- `birth_year`
+- `start_number`
+- `category_id`
+- `created_at`
 
-- `participants`
-  - `id`, `name`, `gender`, `birth_year`, `start_number`, `category_id`, `created_at`
-- `categories`
-  - `id`, `name`, `gender`, `min_birth_year`, `max_birth_year`, `distance`, `created_at`
-- `blocked_start_numbers`
-  - `id`, `number`, `reason`, `created_at`
-- `heats`
-  - `id`, `category_id`, `round_number`, `round_name`, `heat_number`, `created_at`
-- `heat_entries`
-  - `id`, `heat_id`, `participant_id`, `lane_or_position`
-- `results`
-  - `id`, `heat_id`, `participant_id`, `time_value`, `created_at`
-- `admin_users`
-  - `user_id`, `created_at`
+> Alter wird im Frontend aus `birth_year` berechnet (`aktuelles Jahr - birth_year`).
 
-Zusatzlogik:
+### categories
+- `id`
+- `name`
+- `gender`
+- `distance` (60/80/100)
+- `min_age`
+- `max_age`
+- `created_at`
 
-- Trigger `assign_next_start_number()` vergibt automatisch die nächste freie Startnummer.
-- Gesperrte Nummern (`blocked_start_numbers`) werden bei Vergabe ausgelassen.
+### blocked_start_numbers
+- `id`
+- `number`
+- `reason`
+- `created_at`
 
----
+### heats
+- `id`
+- `category_id` (für Königslauf `NULL`)
+- `round_type` (`first_run`, `second_run`, `kings_run`)
+- `heat_number`
+- `created_at`
 
-## Sicherheitskonzept (wichtig)
+### heat_entries
+- `id`
+- `heat_id`
+- `participant_id`
+- `lane_or_position`
 
-### Kein Secret im Frontend
-
-- **Service Role Key darf nie im Browser landen.**
-- `config/admin.secret.example.json` ist nur ein Beispiel für serverseitige Nutzung.
-- In dieser App wird kein Service-Key clientseitig verwendet.
-
-### Supabase Auth + RLS
-
-- Öffentliche Anmeldung ist nur als `insert` auf `participants` erlaubt.
-- Öffentliche Inserts sind eingeschränkt (`name`, `gender`, `category_id = null`, `start_number = null`).
-- Alle Verwaltungsfunktionen (Select/Update/Delete + Kategorien/Läufe/Resultate) sind nur für Admins erlaubt.
-- Admin-Rechte werden über `admin_users` + Funktion `is_admin()` geprüft.
-
----
-
-## Fachlogik
-
-### Startnummern
-
-- Global eindeutig (`unique` auf `participants.start_number`).
-- Automatisch bei Anmeldung per Trigger.
-- Gesperrte Nummern werden nicht vergeben.
-
-### Läufe / Startaufstellungen
-
-- Gruppierung pro Kategorie.
-- Deterministische Sortierung nach Startnummer.
-- Gruppierung standardmäßig in 4er-Blöcke.
-- Restgruppen werden mit 3 oder 2 erzeugt (kein 1er-Lauf).
-
-Beispiel: 10 Teilnehmende → 4 / 4 / 2
-
-### Resultate
-
-- Zeiten pro Person und Lauf speicherbar (`results`).
-- Rundenmodell bereits vorhanden (`heats.round_number`, `heats.round_name`) für spätere Erweiterung (2. Lauf / Königslauf).
+### results
+- `id`
+- `heat_id`
+- `participant_id`
+- `time_value`
+- `created_at`
 
 ---
 
-## Bedienung
+## Sicherheitskonzept / RLS
 
-1. Öffentliche Startseite: Teilnehmende erfassen.
-2. Admin-Login klicken und mit Admin-User anmelden.
-3. In Tabs arbeiten:
-   - Kategorien zuerst erfassen.
-   - Teilnehmende Kategorien zuordnen.
-   - Startaufstellungen je Kategorie generieren.
-   - PDF exportieren.
-   - Zeiten eintragen und speichern.
+Wichtige Punkte:
+
+- Kein Service Role Key im Frontend.
+- Browser nutzt nur `supabaseUrl` + `supabaseAnonKey`.
+- Öffentliche Nutzer (`anon`) dürfen nur Teilnehmer anmelden (`insert` auf `participants`, nur vorgesehene Spalten).
+- Admin-Funktionen sind per `is_admin()` + `admin_users` geschützt.
+- Zusätzliche `GRANT`s auf Schema/Tabellen/Sequenzen verhindern `permission denied for public schema`, während RLS weiterhin den Zugriff einschränkt.
 
 ---
 
-## Hinweise zur Weiterentwicklung
+## Admin-Tabs
 
-- Für bessere Bearbeitungsdialoge können die `prompt`-Eingaben im Teilnehmer-Tab durch Modal-Formulare ersetzt werden.
-- Optionaler Server-/Edge-Function-Layer wäre möglich, ist für dieses Setup aber nicht nötig.
+- Anmeldungen
+- Kategorien
+- Gesperrte Startnummern
+- Läufe / Startaufstellungen
+- Resultate
+- PDF-Export
+
+---
+
+## Prüfhinweise
+
+Nach Deployment prüfen:
+
+1. Öffentliche Anmeldung ohne Login funktioniert.
+2. Pflichtfelder werden validiert.
+3. Admin-Login funktioniert per E-Mail/Passwort.
+4. Admin kann alle Tabellen lesen/schreiben, ohne Permission-Fehler.
+5. Kategorien mit Altersbereichen greifen fachlich korrekt.
+6. Zweiter Lauf speichern + Königslauf aus Top-4 Zeiten generieren.
+7. Gesperrte Startnummern werden bei automatischer Vergabe übersprungen.

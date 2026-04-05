@@ -63,6 +63,26 @@ tr:last-child td { border-bottom: 0; }
   padding: 0.7rem;
   margin-bottom: 0.8rem;
 }
+
+.radio-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+}
+.radio-group legend {
+  font-weight: 600;
+  padding: 0 0.2rem;
+}
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 500;
+}
+.radio-option input {
+  margin: 0;
+}
+
 .small-input { width: 90px; }
 @media (max-width: 700px) {
   .admin-header { flex-direction: column; align-items: flex-start; }

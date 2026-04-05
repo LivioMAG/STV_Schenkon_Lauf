@@ -16,20 +16,29 @@
 
         <form id="public-registration-form" class="grid-form">
           <label>
-            Name
-            <input id="reg-name" name="name" type="text" required maxlength="120" />
+            Nachname
+            <input id="reg-last-name" name="last_name" type="text" required maxlength="120" />
           </label>
           <label>
-            Geschlecht
-            <select id="reg-gender" name="gender" required>
-              <option value="">Bitte wählen</option>
-              <option value="male">Männlich</option>
-              <option value="female">Weiblich</option>
-            </select>
+            Vorname
+            <input id="reg-first-name" name="first_name" type="text" required maxlength="120" />
           </label>
+
+          <fieldset class="radio-group">
+            <legend>Geschlecht</legend>
+            <label class="radio-option">
+              <input type="radio" name="gender" value="male" required />
+              <span>Männlich</span>
+            </label>
+            <label class="radio-option">
+              <input type="radio" name="gender" value="female" required />
+              <span>Weiblich</span>
+            </label>
+          </fieldset>
+
           <label>
-            Geburtsjahr (optional)
-            <input id="reg-birth-year" name="birth_year" type="number" min="1900" max="2100" />
+            Geburtsjahr
+            <input id="reg-birth-year" name="birth_year" type="number" min="1900" max="2100" required />
           </label>
           <button type="submit">Anmelden</button>
         </form>
@@ -71,10 +80,10 @@
         <nav class="tabs" aria-label="Admin Tabs">
           <button class="tab-btn active" data-tab="participants">Anmeldungen</button>
           <button class="tab-btn" data-tab="categories">Kategorien</button>
-          <button class="tab-btn" data-tab="numbers">Startnummern</button>
-          <button class="tab-btn" data-tab="heats">Startaufstellungen</button>
+          <button class="tab-btn" data-tab="numbers">Gesperrte Startnummern</button>
+          <button class="tab-btn" data-tab="heats">Läufe / Startaufstellungen</button>
           <button class="tab-btn" data-tab="pdf">PDF-Export</button>
-          <button class="tab-btn" data-tab="results">Zeiten / Resultate</button>
+          <button class="tab-btn" data-tab="results">Resultate</button>
         </nav>
 
         <section id="tab-participants" class="tab-panel active">
@@ -91,12 +100,13 @@
             <table>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Geschlecht</th>
                   <th>Startnr.</th>
+                  <th>Nachname</th>
+                  <th>Vorname</th>
+                  <th>Geschlecht</th>
                   <th>Kategorie</th>
                   <th>Erstellt</th>
-                  <th>Aktionen</th>
+                  <th>Aktion</th>
                 </tr>
               </thead>
               <tbody id="participants-table-body"></tbody>
@@ -121,8 +131,8 @@
                 <option value="100">100m</option>
               </select>
             </label>
-            <label>Min. Geburtsjahr<input id="category-min-birth-year" type="number" min="1900" max="2100" /></label>
-            <label>Max. Geburtsjahr<input id="category-max-birth-year" type="number" min="1900" max="2100" /></label>
+            <label>Mindestalter<input id="category-min-age" type="number" min="1" max="120" required /></label>
+            <label>Höchstalter<input id="category-max-age" type="number" min="1" max="120" required /></label>
             <div class="inline-actions">
               <button type="submit">Speichern</button>
               <button id="category-reset" type="button" class="secondary">Zurücksetzen</button>
@@ -131,7 +141,7 @@
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Name</th><th>Geschlecht</th><th>Distanz</th><th>Jahrgang</th><th>Aktionen</th></tr>
+                <tr><th>Name</th><th>Geschlecht</th><th>Distanz</th><th>Altersbereich</th><th>Aktionen</th></tr>
               </thead>
               <tbody id="categories-table-body"></tbody>
             </table>
@@ -160,15 +170,16 @@
 
         <section id="tab-heats" class="tab-panel">
           <div class="toolbar">
-            <select id="heats-category-select"></select>
             <select id="heats-round-select">
-              <option value="1">1. Lauf</option>
-              <option value="2">2. Lauf</option>
-              <option value="99">Königslauf (Vorbereitung)</option>
+              <option value="first_run">Erster Lauf</option>
+              <option value="second_run">Zweiter Lauf</option>
+              <option value="kings_run">Königslauf</option>
             </select>
+            <select id="heats-category-select"></select>
             <button id="generate-heats" type="button">Startaufstellungen generieren</button>
             <button id="load-heats" type="button" class="secondary">Anzeigen</button>
           </div>
+          <p class="muted">Im Königslauf werden automatisch die 4 schnellsten Zeiten aus dem zweiten Lauf gesetzt.</p>
           <div id="heats-output"></div>
         </section>
 
