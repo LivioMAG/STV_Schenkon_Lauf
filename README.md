@@ -47,6 +47,8 @@ Datei `config/public.supabase.json` befüllen:
 insert into public.admin_users (user_id) values ('<AUTH_USER_UUID>');
 ```
 
+> Wichtig: Ohne Eintrag in `public.admin_users` hat ein eingeloggter User **keine** Admin-Rechte (RLS blockiert Anmeldungen/Startnummern/Kategorien usw.).
+
 ### 4) Lokal starten
 
 ```bash
@@ -142,3 +144,18 @@ Nach Deployment prüfen:
 5. Kategorien mit Altersbereichen greifen fachlich korrekt.
 6. Zweiter Lauf speichern + Königslauf aus Top-4 Zeiten generieren.
 7. Gesperrte Startnummern werden bei automatischer Vergabe übersprungen.
+
+---
+
+## Update für bestehende Installationen
+
+Wenn Login funktioniert, aber Admin-Daten nicht sichtbar sind oder z. B. beim Sperren einer Startnummer ein RLS-Fehler erscheint:
+
+1. `supabase/update.sql` im Supabase SQL Editor ausführen.
+2. Danach mindestens einen Admin in `public.admin_users` eintragen:
+
+```sql
+insert into public.admin_users (user_id)
+select id from auth.users where email = 'admin@example.com'
+on conflict (user_id) do nothing;
+```
