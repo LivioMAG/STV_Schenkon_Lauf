@@ -99,6 +99,10 @@ tr:last-child td { border-bottom: 0; }
   z-index: 1000;
 }
 
+.loading-overlay.hidden {
+  display: none;
+}
+
 .loading-card {
   min-width: 240px;
   padding: 1rem 1.2rem;
