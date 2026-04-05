@@ -16,6 +16,7 @@ create table if not exists public.participants (
   last_name text not null,
   first_name text not null,
   gender text not null check (gender in ('male', 'female')),
+  age integer not null check (age between 1 and 120),
   birth_year integer not null,
   start_number integer unique,
   category_id bigint references public.categories(id) on delete set null,
@@ -67,6 +68,7 @@ alter table public.categories add column if not exists max_age integer;
 
 alter table public.participants add column if not exists last_name text;
 alter table public.participants add column if not exists first_name text;
+alter table public.participants add column if not exists age integer;
 
 alter table public.heats add column if not exists round_type text;
 
@@ -138,6 +140,12 @@ begin
        or first_name is null
   $sql$;
 
+  execute $sql$
+    update public.participants
+    set age = greatest(1, extract(year from now())::int - birth_year)
+    where age is null and birth_year is not null
+  $sql$;
+
   -- Round migration from legacy schema
   if exists (
     select 1
@@ -170,7 +178,11 @@ alter table public.categories add constraint categories_max_age_check check (max
 
 alter table public.participants alter column last_name set not null;
 alter table public.participants alter column first_name set not null;
+alter table public.participants alter column age set not null;
 alter table public.participants alter column birth_year set not null;
+
+alter table public.participants drop constraint if exists participants_age_check;
+alter table public.participants add constraint participants_age_check check (age between 1 and 120);
 
 alter table public.heats alter column round_type set not null;
 alter table public.heats drop constraint if exists heats_round_type_check;
@@ -293,7 +305,7 @@ grant usage on schema public to anon, authenticated;
 grant usage, select on all sequences in schema public to anon, authenticated;
 
 grant select, insert, update, delete on public.participants to authenticated;
-grant insert (last_name, first_name, gender, birth_year) on public.participants to anon;
+grant insert (last_name, first_name, gender, age, birth_year) on public.participants to anon;
 
 grant select, insert, update, delete on public.categories to authenticated;
 grant select, insert, update, delete on public.blocked_start_numbers to authenticated;
@@ -320,6 +332,7 @@ with check (
   last_name is not null
   and first_name is not null
   and gender in ('male', 'female')
+  and age between 1 and 120
   and birth_year between 1900 and extract(year from now())::int
   and category_id is null
 );

@@ -4,7 +4,7 @@ Web-App für einen Amateur-Sprintanlass (60m, 80m, 100m) mit öffentlicher Anmel
 
 ## Was wurde fachlich überarbeitet?
 
-- Öffentliche Anmeldung funktioniert ohne Login mit Pflichtfeldern: **Nachname, Vorname, Geschlecht (exklusive Auswahl), Geburtsjahr**.
+- Öffentliche Anmeldung funktioniert ohne Login mit Pflichtfeldern: **Nachname, Vorname, Geschlecht (exklusive Auswahl), Alter**.
 - Admin-Ansicht nutzt Teilnehmerdaten mit getrenntem Namen (`last_name`, `first_name`) und zeigt die gewünschte Spaltenreihenfolge.
 - Kategorien wurden auf **Altersbereiche** umgestellt (`min_age`, `max_age`) statt Jahrgangsgrenzen.
 - Laufmodell wurde auf `round_type` vereinheitlicht:
@@ -66,12 +66,13 @@ Dann öffnen: `http://localhost:8080`
 - `last_name`
 - `first_name`
 - `gender`
+- `age`
 - `birth_year`
 - `start_number`
 - `category_id`
 - `created_at`
 
-> Alter wird im Frontend aus `birth_year` berechnet (`aktuelles Jahr - birth_year`).
+> Für die Anmeldung wird `age` direkt erfasst; `birth_year` wird zusätzlich daraus berechnet.
 
 ### categories
 - `id`
@@ -128,7 +129,6 @@ Wichtige Punkte:
 - Kategorien
 - Gesperrte Startnummern
 - Läufe / Startaufstellungen
-- Resultate
 - PDF-Export
 
 ---
