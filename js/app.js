@@ -1067,29 +1067,10 @@ function escapeHtml(value) {
 
 
 async function withLoadingScreen(message, task) {
-  const overlay = $('loading-overlay');
-  const textElement = $('loading-text');
-  if (!overlay || !textElement) {
-    return task();
-  }
-
-  textElement.textContent = message || 'Lade ...';
-  const showDelayMs = 250;
-  let isOverlayVisible = false;
-  const showTimer = window.setTimeout(() => {
-    overlay.classList.remove('hidden');
-    isOverlayVisible = true;
-  }, showDelayMs);
-
   try {
     return await task();
   } catch (error) {
     setAdminMessage(error.message || 'Vorgang fehlgeschlagen.', true);
     return null;
-  } finally {
-    window.clearTimeout(showTimer);
-    if (isOverlayVisible) {
-      overlay.classList.add('hidden');
-    }
   }
 }
