@@ -95,13 +95,15 @@ async function onPublicRegistration(event) {
 
   const currentYear = new Date().getFullYear();
   const birthYear = currentYear - age;
+  const autoCategoryId = await findCategoryIdByProfile(gender, age);
 
   const { error } = await supabase.from('participants').insert({
     last_name: lastName,
     first_name: firstName,
     gender,
     age,
-    birth_year: birthYear
+    birth_year: birthYear,
+    category_id: autoCategoryId
   });
 
   if (error) {
@@ -426,16 +428,12 @@ async function showStartLineup() {
 
 async function getLineupParticipants(roundType, categoryId) {
   if (roundType === 'first_run') {
-    const { data, error } = await supabase
-      .from('participants')
-      .select('id,last_name,first_name,start_number,gender,category_id')
-      .eq('category_id', categoryId)
-      .order('start_number', { ascending: true });
-    if (error) {
-      setAdminMessage(error.message, true);
+    const data = await getParticipantsForCategory(categoryId);
+    if (!data.length) {
+      setAdminMessage('Keine Teilnehmenden in dieser Kategorie gefunden. Prüfe Alter/Geschlecht und Kategorie-Bereich.', true);
       return [];
     }
-    return data || [];
+    return data;
   }
 
   if (roundType === 'second_run') {
@@ -932,6 +930,52 @@ function arraysEqual(a, b) {
 function selectedCategory() {
   const categoryId = Number($('heats-category-select').value);
   return categories.find((c) => c.id === categoryId) || null;
+}
+
+function categoryById(categoryId) {
+  return categories.find((c) => c.id === categoryId) || null;
+}
+
+async function findCategoryIdByProfile(gender, age) {
+  const { data, error } = await supabase
+    .from('categories')
+    .select('id')
+    .eq('gender', gender)
+    .lte('min_age', age)
+    .gte('max_age', age)
+    .order('min_age', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    setAdminMessage(`Kategorie konnte nicht automatisch zugeordnet werden: ${error.message}`, true);
+    return null;
+  }
+
+  return data?.id ?? null;
+}
+
+async function getParticipantsForCategory(categoryId) {
+  const category = categoryById(categoryId);
+  if (!category) {
+    setAdminMessage('Die ausgewählte Kategorie wurde nicht gefunden.', true);
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('participants')
+    .select('id,last_name,first_name,start_number,gender,category_id,age,birth_year')
+    .eq('gender', category.gender)
+    .gte('age', category.min_age)
+    .lte('age', category.max_age)
+    .order('start_number', { ascending: true });
+
+  if (error) {
+    setAdminMessage(error.message, true);
+    return [];
+  }
+
+  return data || [];
 }
 
 function findCategoryForParticipant(gender, age) {
